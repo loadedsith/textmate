@@ -74,7 +74,7 @@ namespace ct
 		CTLinePtr _line;
 		std::vector< std::pair<CFRange, CGColorPtr> > _backgrounds;
 		std::vector< std::pair<CFRange, CGColorPtr> > _underlines;
-		std::vector< std::pair<CFRange, CGColorPtr> > _grahams;
+		std::vector< std::pair<CFRange, CGColorPtr> > _foldGuides;
 	};
 
 } /* ct */

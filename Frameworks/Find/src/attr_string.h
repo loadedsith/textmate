@@ -24,7 +24,7 @@ namespace ns
 			emboss,    noemboss,
 
 			push,      pop,
-			graham
+			foldGuide
 		};
 		struct background
 		{
@@ -161,7 +161,7 @@ namespace ns
 						// Handle custom styles
 						switch(style)
 						{
-							case style::graham:
+							case style::foldGuide:
 								attr  = NSUnderlineStyleAttributeName;
 								value = @(NSUnderlineStyleSingle);
 								break;

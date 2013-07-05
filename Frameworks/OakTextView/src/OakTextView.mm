@@ -916,7 +916,7 @@ doScroll:
 			CFAttributedStringSetAttribute(str, CFRangeMake(0, CFAttributedStringGetLength(str)), kCTUnderlineStyleAttributeName, cf::wrap(0x1|kCTUnderlinePatternSolid));
 		}  
 			
-		if(styles.graham()){
+		if(styles.foldGuide()){
 //			CFAttributedStringSetAttribute(str, CFRangeMake(0, CFAttributedStringGetLength(str)), kCTUnderlineStyleAttributeName, cf::wrap(0x1|kCTUnderlinePatternDashDot));
 		}  
 			

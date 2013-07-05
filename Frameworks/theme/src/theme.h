@@ -9,7 +9,7 @@ typedef std::shared_ptr<struct CGColor> CGColorPtr;
 
 struct PUBLIC styles_t
 {
-	styles_t (CGColorPtr foreground, CGColorPtr background, CGColorPtr caret, CGColorPtr selection, CTFontPtr font, bool underlined, bool misspelled, bool graham) : _foreground(foreground), _background(background), _caret(caret), _selection(selection), _font(font), _underlined(underlined), _misspelled(misspelled), _graham(graham){ }
+	styles_t (CGColorPtr foreground, CGColorPtr background, CGColorPtr caret, CGColorPtr selection, CTFontPtr font, bool underlined, bool misspelled, bool foldGuide) : _foreground(foreground), _background(background), _caret(caret), _selection(selection), _font(font), _underlined(underlined),_misspelled(misspelled), _foldGuide(foldGuide){ }
 
 	CGColorRef foreground () const { return _foreground.get(); }
 	CGColorRef background () const { return _background.get(); }
@@ -18,7 +18,7 @@ struct PUBLIC styles_t
 	CTFontRef font () const        { return _font.get(); }
 	bool underlined () const       { return _underlined; }
 	bool misspelled () const       { return _misspelled; }
-	bool graham () const       	 { return _graham; }
+	bool foldGuide () const       	 { return _foldGuide; }
 	
 private:
 	CGColorPtr _foreground;
@@ -27,8 +27,8 @@ private:
 	CGColorPtr _selection;
 	CTFontPtr _font;
 	bool _underlined;
-	bool _graham;
 	bool _misspelled;
+	bool _foldGuide;
 };
 
 struct PUBLIC gutter_styles_t
@@ -89,7 +89,7 @@ private:
 
 	struct decomposed_style_t
 	{
-		decomposed_style_t (scope::selector_t const& scopeSelector = scope::selector_t(), std::string const& fontName = NULL_STR, CGFloat fontSize = -1) : scope_selector(scopeSelector), font_name(fontName), font_size(fontSize), bold(bool_unset), italic(bool_unset), underlined(bool_unset), misspelled(bool_unset), graham(bool_unset) { }
+		decomposed_style_t (scope::selector_t const& scopeSelector = scope::selector_t(), std::string const& fontName = NULL_STR, CGFloat fontSize = -1) : scope_selector(scopeSelector), font_name(fontName), font_size(fontSize), bold(bool_unset), italic(bool_unset), underlined(bool_unset), misspelled(bool_unset), foldGuide(bool_unset) { }
 		decomposed_style_t& operator+= (decomposed_style_t const& rhs);
 
 		scope::selector_t scope_selector;
@@ -105,7 +105,7 @@ private:
 		bool_t italic;
 		bool_t underlined;
 		bool_t misspelled;
-		bool_t graham;
+		bool_t foldGuide;
 	};
 	static std::vector<decomposed_style_t> global_styles (scope::scope_t const& scope);
 
