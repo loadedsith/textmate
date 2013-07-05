@@ -70,13 +70,15 @@ theme_t::decomposed_style_t theme_t::shared_styles_t::parse_styles (plist::dicti
 			res.bold       = bool_false;
 			res.italic     = bool_false;
 			res.underlined = bool_false;
+			res.graham 		= bool_false;
 		}
 		else
 		{
 			res.bold       = fontStyle.find("bold")      != std::string::npos ? bool_true : bool_unset;
 			res.italic     = fontStyle.find("italic")    != std::string::npos ? bool_true : bool_unset;
+			res.graham 		= fontStyle.find("graham")    != std::string::npos ? bool_true : bool_unset;
 			res.underlined = fontStyle.find("underline") != std::string::npos ? bool_true : bool_unset;
-		}
+		} 
 	}
 	return res;
 }
@@ -98,6 +100,7 @@ std::vector<theme_t::decomposed_style_t> theme_t::global_styles (scope::scope_t 
 		{ "bold",       &decomposed_style_t::bold       },
 		{ "italic",     &decomposed_style_t::italic     },
 		{ "underline",  &decomposed_style_t::underlined },
+		{ "graham",     &decomposed_style_t::graham },
 	};
 
 	std::vector<decomposed_style_t> res;
@@ -399,7 +402,7 @@ styles_t const& theme_t::styles_for_scope (scope::scope_t const& scope) const
 		CGColorPtr caret      = OakColorCreateFromThemeColor(base.caret,      _styles->_color_space) ?: CGColorPtr(CGColorCreate(_styles->_color_space, (CGFloat[4]){   0,   0,   0,   1 }), CGColorRelease);
 		CGColorPtr selection  = OakColorCreateFromThemeColor(base.selection,  _styles->_color_space) ?: CGColorPtr(CGColorCreate(_styles->_color_space, (CGFloat[4]){ 0.5, 0.5, 0.5,   1 }), CGColorRelease);
 
-		styles_t res(foreground, background, caret, selection, font, base.underlined == bool_true, base.misspelled == bool_true);
+		styles_t res(foreground, background, caret, selection, font, base.underlined == bool_true, base.misspelled == bool_true, base.graham == bool_true);
 		styles = _cache.insert(std::make_pair(scope, res)).first;
 	}
 	return styles->second;
@@ -480,6 +483,7 @@ theme_t::decomposed_style_t& theme_t::decomposed_style_t::operator+= (theme_t::d
 	bold       = rhs.bold       == bool_unset ? bold       : rhs.bold;
 	italic     = rhs.italic     == bool_unset ? italic     : rhs.italic;
 	underlined = rhs.underlined == bool_unset ? underlined : rhs.underlined;
+	graham     = rhs.graham 	 == bool_unset ? graham     : rhs.graham;
 	misspelled = rhs.misspelled == bool_unset ? misspelled : rhs.misspelled;
 
 	return *this;

@@ -7,16 +7,18 @@ namespace ng
 {
 	struct PUBLIC context_t
 	{
-		context_t (CGContextRef context, CGImageRef spellingDot = nil, std::function<CGImageRef(double, double)> foldingDotsFactory = std::function<CGImageRef(double, double)>());
+		context_t (CGContextRef context, CGImageRef spellingDot = nil, CGImageRef fold_guide = nil, std::function<CGImageRef(double, double)> foldingDotsFactory = std::function<CGImageRef(double, double)>());
 		~context_t ();
 
 		operator CGContextRef () const      { return _context; }
 		CGImageRef spelling_dot () const    { return _spelling_dot; }
+		CGImageRef fold_guide () const    { return _fold_guide; }
 		CGImageRef folding_dots (double, double) const;
 
 	private:
 		CGContextRef _context;
 		CGImageRef _spelling_dot;
+		CGImageRef _fold_guide;
 		std::function<CGImageRef(double, double)> _folding_dots_create;
 		mutable std::map<std::pair<double, double>, CGImageRef> _folding_dots_cache;
 	};
@@ -72,6 +74,7 @@ namespace ct
 		CTLinePtr _line;
 		std::vector< std::pair<CFRange, CGColorPtr> > _backgrounds;
 		std::vector< std::pair<CFRange, CGColorPtr> > _underlines;
+		std::vector< std::pair<CFRange, CGColorPtr> > _grahams;
 	};
 
 } /* ct */

@@ -10,16 +10,20 @@ namespace ng
 	// = context_t =
 	// =============
 
-	context_t::context_t (CGContextRef context, CGImageRef spellingDot, std::function<CGImageRef(double, double)> foldingDotsFactory) : _context(context), _spelling_dot(spellingDot), _folding_dots_create(foldingDotsFactory)
+	context_t::context_t (CGContextRef context, CGImageRef spellingDot, CGImageRef foldGuide, std::function<CGImageRef(double, double)> foldingDotsFactory) : _context(context), _spelling_dot(spellingDot),_fold_guide(foldGuide), _folding_dots_create(foldingDotsFactory)
 	{
 		if(_spelling_dot)
 			CFRetain(_spelling_dot);
+		if(_fold_guide)
+			CFRetain(_fold_guide);
 	}
 
 	context_t::~context_t ()
 	{
 		if(_spelling_dot)
 			CFRelease(_spelling_dot);
+		if(_fold_guide)
+			CFRelease(_fold_guide);
 
 		iterate(pair, _folding_dots_cache)
 		{
@@ -111,8 +115,12 @@ namespace ct
 			CFAttributedStringSetAttribute(str, CFRangeMake(0, CFAttributedStringGetLength(str)), kCTFontAttributeName, styles.font());
 			CFAttributedStringSetAttribute(str, CFRangeMake(0, CFAttributedStringGetLength(str)), kCTForegroundColorAttributeName, textColor ?: styles.foreground());
 			CFAttributedStringSetAttribute(str, CFRangeMake(0, CFAttributedStringGetLength(str)), kCTLigatureAttributeName, cf::wrap(0));
-			if(styles.underlined())
-				_underlines.push_back(std::make_pair(CFRangeMake(CFAttributedStringGetLength(toDraw), CFAttributedStringGetLength(str)), CGColorPtr(CGColorRetain(styles.foreground()), CGColorRelease)));
+			if(styles.underlined()){
+				 _underlines.push_back(std::make_pair(CFRangeMake(CFAttributedStringGetLength(toDraw), CFAttributedStringGetLength(str)), CGColorPtr(CGColorRetain(styles.foreground()), CGColorRelease)));
+			}
+			if(styles.graham()){
+				_grahams.push_back(std::make_pair(CFRangeMake(CFAttributedStringGetLength(toDraw), CFAttributedStringGetLength(str)), CGColorPtr(CGColorRetain(styles.foreground()), CGColorRelease)));
+			}
 			_backgrounds.push_back(std::make_pair(CFRangeMake(CFAttributedStringGetLength(toDraw), CFAttributedStringGetLength(str)), CGColorPtr(CGColorRetain(styles.background()), CGColorRelease)));
 			CFAttributedStringReplaceAttributedString(toDraw, CFRangeMake(CFAttributedStringGetLength(toDraw), 0), str);
 			CFRelease(str);
@@ -134,6 +142,16 @@ namespace ct
 	CGFloat line_t::offset_for_index (size_t index) const
 	{
 		return CTLineGetOffsetForStringIndex(_line.get(), utf16::distance(_text.begin(), _text.begin() + index), NULL);
+	}
+
+	static void draw_fold_guide (ng::context_t const& context, CGRect const& rect)
+	{
+		if(CGImageRef fold_guide = context.fold_guide())
+		{
+			CGContextSaveGState(context);
+			CGContextDrawImage(context, CGRectMake(rect.origin.x, rect.origin.y, rect.size.width, 3), fold_guide);
+			CGContextRestoreGState(context);
+		}
 	}
 
 	static void draw_spelling_dot (ng::context_t const& context, CGRect const& rect, bool isFlipped)
@@ -177,6 +195,7 @@ namespace ct
 
 	void line_t::draw_background (CGPoint pos, CGFloat height, ng::context_t const& context, bool isFlipped, CGColorRef currentBackground) const
 	{
+
 		iterate(pair, _backgrounds)
 		{
 			if(CFEqual(currentBackground, pair->second.get()))
@@ -186,6 +205,13 @@ namespace ct
 			CGFloat x2 = round(pos.x + CTLineGetOffsetForStringIndex(_line.get(), pair->first.location + pair->first.length, NULL));
 			render::fill_rect(context, pair->second.get(), CGRectMake(x1, pos.y, x2 - x1, height));
 		}
+		iterate(pair, _grahams) // Draw a vertical bar to act as a fold guide, to be used with the fold guide extention
+		{
+//			CGFloat x1 = round(pos.x + CTLineGetOffsetForStringIndex(_line.get(), pair->first.location, NULL));
+			CGFloat x2 = round((pos.x + CTLineGetOffsetForStringIndex(_line.get(), pair->first.location + pair->first.length, NULL))-(height/12)*1.5);
+			render::fill_rect(context, pair->second.get(), CGRectMake(x2, pos.y , (height/12)*1.5, height));
+		}
+
 	}
 
 } /* ct */

@@ -73,6 +73,7 @@ struct buffer_refresh_callback_t;
 	NSTimer* blinkCaretTimer;
 
 	NSImage* spellingDotImage;
+	NSImage* foldGuideImage;
 	NSImage* foldingDotsImage;
 
 	// =================
@@ -536,6 +537,7 @@ static std::string shell_quote (std::vector<std::string> paths)
 		_fontSmoothing  = (OTVFontSmoothing)[[NSUserDefaults standardUserDefaults] integerForKey:kUserDefaultsFontSmoothingKey];
 
 		spellingDotImage = [NSImage imageNamed:@"SpellingDot" inSameBundleAsClass:[self class]];
+		foldGuideImage = [NSImage imageNamed:@"FoldGuide" inSameBundleAsClass:[self class]];
 		foldingDotsImage = [NSImage imageNamed:@"FoldingDots" inSameBundleAsClass:[self class]];
 
 		[self registerForDraggedTypes:[[self class] dropTypes]];
@@ -757,7 +759,7 @@ doScroll:
 		return NULL;
 	};
 
-	layout->draw(ng::context_t(context, [spellingDotImage CGImageForProposedRect:NULL context:[NSGraphicsContext currentContext] hints:nil], foldingDotsFactory), aRect, [self isFlipped], self.showInvisibles, merge(editor->ranges(), [self markedRanges]), liveSearchRanges);
+	layout->draw(ng::context_t(context, [spellingDotImage CGImageForProposedRect:NULL context:[NSGraphicsContext currentContext] hints:nil],  [foldGuideImage CGImageForProposedRect:NULL context:[NSGraphicsContext currentContext] hints:nil], foldingDotsFactory), aRect, [self isFlipped], self.showInvisibles, merge(editor->ranges(), [self markedRanges]), liveSearchRanges);
 }
 
 // ===============
@@ -910,8 +912,14 @@ doScroll:
 		CFAttributedStringReplaceString(str, CFRangeMake(0, 0), cf::wrap(document->buffer().substr(i, j)));
 		CFAttributedStringSetAttribute(str, CFRangeMake(0, CFAttributedStringGetLength(str)), kCTFontAttributeName, styles.font());
 		CFAttributedStringSetAttribute(str, CFRangeMake(0, CFAttributedStringGetLength(str)), kCTForegroundColorAttributeName, styles.foreground());
-		if(styles.underlined())
+		if(styles.underlined()){
 			CFAttributedStringSetAttribute(str, CFRangeMake(0, CFAttributedStringGetLength(str)), kCTUnderlineStyleAttributeName, cf::wrap(0x1|kCTUnderlinePatternSolid));
+		}  
+			
+		if(styles.graham()){
+//			CFAttributedStringSetAttribute(str, CFRangeMake(0, CFAttributedStringGetLength(str)), kCTUnderlineStyleAttributeName, cf::wrap(0x1|kCTUnderlinePatternDashDot));
+		}  
+			
 		CFAttributedStringReplaceAttributedString(res, CFRangeMake(CFAttributedStringGetLength(res), 0), str);
 		CFRelease(str);
 	}
