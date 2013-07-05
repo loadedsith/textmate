@@ -200,16 +200,15 @@ namespace ct
 		{
 			if(CFEqual(currentBackground, pair->second.get()))
 				continue;
-
 			CGFloat x1 = round(pos.x + CTLineGetOffsetForStringIndex(_line.get(), pair->first.location, NULL));
 			CGFloat x2 = round(pos.x + CTLineGetOffsetForStringIndex(_line.get(), pair->first.location + pair->first.length, NULL));
 			render::fill_rect(context, pair->second.get(), CGRectMake(x1, pos.y, x2 - x1, height));
 		}
 		iterate(pair, _foldGuides) // Draw a vertical bar to act as a fold guide, to be used with the fold guide extention
 		{
-//			CGFloat x1 = round(pos.x + CTLineGetOffsetForStringIndex(_line.get(), pair->first.location, NULL));
-			CGFloat x2 = round((pos.x + CTLineGetOffsetForStringIndex(_line.get(), pair->first.location + pair->first.length, NULL))-(height/12)*1.5);
-			render::fill_rect(context, pair->second.get(), CGRectMake(x2, pos.y , (height/12)*1.5, height));
+			CGFloat x1 = round((pos.x + CTLineGetOffsetForStringIndex(_line.get(), pair->first.location, NULL))+(height/12)*1.5);
+//			CGFloat x2 = round((pos.x + CTLineGetOffsetForStringIndex(_line.get(), pair->first.location + pair->first.length, NULL))-(height/12)*1.5);
+			render::fill_rect(context, pair->second.get(), CGRectMake(x1, pos.y , (height/12)*.75, height));
 		}
 
 	}
