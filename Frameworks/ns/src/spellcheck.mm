@@ -5,20 +5,34 @@
 
 namespace ns
 {
-	spelling_tag_t::helper_t::helper_t ()
+	long int spelling_tag_t::helper_t::tag ()
 	{
-		_tag = [NSSpellChecker uniqueSpellDocumentTag];
+		if(!_did_setup)
+		{
+			// This should only be called from spellcheck() which runs on the main queue
+			ASSERT(dispatch_get_current_queue() == dispatch_get_main_queue());
+
+			_tag = [NSSpellChecker uniqueSpellDocumentTag];
+			_did_setup = true;
+		}
+		return _tag;
 	}
 
 	spelling_tag_t::helper_t::~helper_t ()
 	{
-		@autoreleasepool {
-			[[NSSpellChecker sharedSpellChecker] closeSpellDocumentWithTag:_tag];
+		if(_did_setup)
+		{
+			NSInteger tag = _tag;
+			dispatch_async(dispatch_get_main_queue(), ^{
+				@autoreleasepool {
+					[[NSSpellChecker sharedSpellChecker] closeSpellDocumentWithTag:tag];
+				}
+			});
 		}
 	}
 
 	template <typename _OutputIter>
-	_OutputIter spellcheck (char const* first, char const* last, std::string const& language, int tag, size_t offset, _OutputIter out)
+	_OutputIter spellcheck (char const* first, char const* last, std::string const& language, long int tag, size_t offset, _OutputIter out)
 	{
 		NSSpellChecker* spellChecker = [NSSpellChecker sharedSpellChecker];
 		NSString* lang               = [NSString stringWithCxxString:language];
@@ -37,20 +51,25 @@ namespace ns
 
 	std::vector<ns::range_t> spellcheck (char const* first, char const* last, std::string const& language, spelling_tag_t const& tag)
 	{
-		std::vector<ns::range_t> res;
-		size_t offset = 0;
-
-		@autoreleasepool {
-			while(first != last)
-			{
-				char const* eol = std::find(first, last, '\n');
-				spellcheck(first, eol, language, tag, offset, back_inserter(res));
-				while(eol != last && *eol == '\n')
-					++eol;
-				offset += eol - first;
-				first = eol;
+		__block std::vector<ns::range_t> res;
+		void(^block)() = ^{
+			@autoreleasepool {
+				size_t offset = 0;
+				for(char const* it = first; it != last; )
+				{
+					char const* eol = std::find(it, last, '\n');
+					spellcheck(it, eol, language, tag, offset, back_inserter(res));
+					while(eol != last && *eol == '\n')
+						++eol;
+					offset += eol - it;
+					it = eol;
+				}
 			}
-		}
+		};
+
+		if(dispatch_get_current_queue() != dispatch_get_main_queue())
+				dispatch_sync(dispatch_get_main_queue(), block);
+		else	block();
 
 		return res;
 	}

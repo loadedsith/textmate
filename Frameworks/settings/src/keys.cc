@@ -1,6 +1,7 @@
 #include "keys.h"
 
 std::string const kSettingsFileTypeKey                    = "fileType";
+std::string const kSettingsRelatedFilePathKey             = "relatedFilePath";
 
 std::string const kSettingsTabSizeKey                     = "tabSize";
 std::string const kSettingsSoftTabsKey                    = "softTabs";

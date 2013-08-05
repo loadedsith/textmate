@@ -22,6 +22,7 @@
 #import <OakFilterList/FileChooser.h>
 #import <OakSystem/application.h>
 #import <Find/Find.h>
+#import <CrashReporter/utility.h>
 #import <file/path_info.h>
 #import <io/entries.h>
 #import <scm/scm.h>
@@ -217,7 +218,10 @@ namespace
 
 	static document::document_ptr create_untitled_document_in_folder (std::string const& suggestedFolder)
 	{
-		return document::from_content("", settings_for_path(NULL_STR, file::path_attributes(NULL_STR), suggestedFolder).get(kSettingsFileTypeKey, "text.plain"));
+		auto doc = document::from_content("", settings_for_path(NULL_STR, file::path_attributes(NULL_STR), suggestedFolder).get(kSettingsFileTypeKey, "text.plain"));
+		auto const settings = settings_for_path(NULL_STR, doc->file_type(), suggestedFolder);
+		doc->set_indent(text::indent_t(std::max(1, settings.get(kSettingsTabSizeKey, 4)), SIZE_T_MAX, settings.get(kSettingsSoftTabsKey, false)));
+		return doc;
 	}
 }
 
@@ -464,6 +468,9 @@ namespace
 
 - (void)closeTabsAtIndexes:(NSIndexSet*)anIndexSet askToSaveChanges:(BOOL)askToSaveFlag createDocumentIfEmpty:(BOOL)createIfEmptyFlag
 {
+	crash_reporter_info_t crashInfo(text::format("close %lu documents with %zu open and index of selected being %zu.", [anIndexSet count], _documents.size(), _selectedTabIndex));
+	crashInfo << to_s([anIndexSet description]);
+
 	std::vector<document::document_ptr> documentsToClose;
 	for(NSUInteger index = [anIndexSet firstIndex]; index != NSNotFound; index = [anIndexSet indexGreaterThanIndex:index])
 		documentsToClose.push_back(_documents[index]);
@@ -510,6 +517,8 @@ namespace
 			newSelectedTabIndex = newDocuments.empty() ? 0 : newDocuments.size() - 1;
 	}
 
+	crashInfo << text::format("keep %zu documents open, new selected index at %zu, create untitled %s", newDocuments.size(), newSelectedTabIndex, BSTR((createIfEmptyFlag && newDocuments.empty())));
+
 	if(createIfEmptyFlag && newDocuments.empty())
 		newDocuments.push_back(create_untitled_document_in_folder(to_s(self.untitledSavePath)));
 
@@ -544,7 +553,7 @@ namespace
 	NSMutableIndexSet* allTabs = [NSMutableIndexSet indexSetWithIndexesInRange:NSMakeRange(0, _documents.size())];
 	for(size_t i = 0; i < _documents.size(); ++i)
 	{
-		if(_documents[i]->is_modified() && _documents[i]->path() == NULL_STR)
+		if(_documents[i]->is_modified() && _documents[i]->path() == NULL_STR || _documents[i]->sticky())
 			[allTabs removeIndex:i];
 	}
 	[self closeTabsAtIndexes:allTabs askToSaveChanges:YES createDocumentIfEmpty:YES];
@@ -557,7 +566,7 @@ namespace
 	NSMutableIndexSet* otherTabs = [NSMutableIndexSet indexSet];
 	for(size_t i = 0; i < _documents.size(); ++i)
 	{
-		if(i != tabIndex && (!_documents[i]->is_modified() || _documents[i]->path() != NULL_STR))
+		if(i != tabIndex && (!_documents[i]->is_modified() || _documents[i]->path() != NULL_STR) && !_documents[i]->sticky())
 			[otherTabs addIndex:i];
 	}
 	[self closeTabsAtIndexes:otherTabs askToSaveChanges:YES createDocumentIfEmpty:YES];
@@ -683,7 +692,8 @@ namespace
 	if(NSString* folder = [self.fileBrowser directoryForNewItems])
 	{
 		std::string path = "untitled";
-		for(auto item : bundles::query(bundles::kFieldGrammarScope, settings_for_path(NULL_STR, "attr.untitled", to_s(folder)).get(kSettingsFileTypeKey, "text.plain")))
+		std::string fileType = settings_for_path(NULL_STR, "attr.untitled", to_s(folder)).get(kSettingsFileTypeKey, "text.plain");
+		for(auto item : bundles::query(bundles::kFieldGrammarScope, fileType))
 		{
 			std::string const& ext = item->value_for_field(bundles::kFieldGrammarExtension);
 			if(ext != NULL_STR)
@@ -694,6 +704,10 @@ namespace
 		if([[OakFileManager sharedInstance] createFileAtURL:url window:self.window])
 		{
 			document::document_ptr doc = document::create(to_s([url path]));
+			doc->set_file_type(fileType);
+			auto const settings = settings_for_path(doc->virtual_path(), doc->file_type(), path::parent(doc->path()));
+			doc->set_indent(text::indent_t(std::max(1, settings.get(kSettingsTabSizeKey, 4)), SIZE_T_MAX, settings.get(kSettingsSoftTabsKey, false)));
+
 			doc->open();
 			[self setSelectedDocument:doc];
 			doc->close();
@@ -793,7 +807,7 @@ namespace
 		for(size_t i = 0; i < newDocuments.size(); ++i)
 		{
 			document::document_ptr doc = newDocuments[i];
-			if(!doc->is_modified() && uuids.find(doc->identifier()) == uuids.end())
+			if(!doc->is_modified() && uuids.find(doc->identifier()) == uuids.end() && !_documents[i]->sticky())
 				[indexSet addIndex:i];
 		}
 		[self closeTabsAtIndexes:indexSet askToSaveChanges:YES createDocumentIfEmpty:NO];
@@ -810,7 +824,7 @@ namespace
 			for(size_t i = 0; i < newDocuments.size(); ++i)
 			{
 				document::document_ptr doc = newDocuments[i];
-				if(!doc->is_modified() && doc->is_on_disk() && uuids.find(doc->identifier()) == uuids.end())
+				if(!doc->is_modified() && doc->is_on_disk() && uuids.find(doc->identifier()) == uuids.end() && !doc->sticky())
 					ranked.insert(std::make_pair(doc->lru(), i));
 			}
 
@@ -1296,6 +1310,11 @@ namespace
 			if(path::is_absolute(userProjectDirectory))
 				projectPath = [NSString stringWithCxxString:path::normalize(userProjectDirectory)];
 		}
+		else if(NSString* urlString = [[NSUserDefaults standardUserDefaults] stringForKey:kUserDefaultsInitialFileBrowserURLKey])
+		{
+			if(NSURL* url = [NSURL URLWithString:urlString])
+				projectPath = [[url filePathURL] path];
+		}
 
 		self.projectPath         = projectPath;
 		self.documentPath        = [NSString stringWithCxxString:_selectedDocument->path()];
@@ -1397,6 +1416,16 @@ namespace
 	}
 }
 
+- (void)toggleSticky:(id)sender
+{
+	if(NSIndexSet* indexSet = [self tryObtainIndexSetFrom:sender])
+	{
+		std::vector<document::document_ptr> documents;
+		for(NSUInteger index = [indexSet firstIndex]; index != NSNotFound; index = [indexSet indexGreaterThanIndex:index])
+			_documents[index]->set_sticky(!_documents[index]->sticky());
+	}
+}
+
 - (NSMenu*)menuForTabBarView:(OakTabBarView*)aTabBarView
 {
 	NSInteger tabIndex = aTabBarView.tag;
@@ -1413,28 +1442,32 @@ namespace
 		[rightSideTabs removeIndexes:[NSIndexSet indexSetWithIndexesInRange:NSMakeRange(0, tabIndex + 1)]];
 	}
 
+	for(size_t i = 0; i < _documents.size(); ++i)
+	{
+		if(_documents[i]->sticky())
+		{
+			[otherTabs removeIndex:i];
+			[rightSideTabs removeIndex:i];
+		}
+	}
+
 	SEL closeSingleTabSelector = tabIndex == _selectedTabIndex ? @selector(performCloseTab:) : @selector(takeTabsToCloseFrom:);
 
 	NSMenu* menu = [NSMenu new];
-	[menu setAutoenablesItems:NO];
-
-	[menu addItemWithTitle:@"New Tab"                 action:@selector(takeNewTabIndexFrom:)  keyEquivalent:@""];
-	[menu addItem:[NSMenuItem separatorItem]];
-	[menu addItemWithTitle:@"Close Tab"               action:closeSingleTabSelector           keyEquivalent:@""];
-	[menu addItemWithTitle:@"Close Other Tabs"        action:@selector(takeTabsToCloseFrom:)  keyEquivalent:@""];
-	[menu addItemWithTitle:@"Close Tabs to the Right" action:@selector(takeTabsToCloseFrom:)  keyEquivalent:@""];
-	[menu addItem:[NSMenuItem separatorItem]];
+	[menu addItemWithTitle:@"New Tab"                 action:@selector(takeNewTabIndexFrom:)   keyEquivalent:@""];
 	[menu addItemWithTitle:@"Move Tab to New Window"  action:@selector(takeTabsToTearOffFrom:) keyEquivalent:@""];
+	[menu addItem:[NSMenuItem separatorItem]];
+	[menu addItemWithTitle:@"Close Tab"               action:closeSingleTabSelector            keyEquivalent:@""];
+	[menu addItemWithTitle:@"Close Other Tabs"        action:@selector(takeTabsToCloseFrom:)   keyEquivalent:@""];
+	[menu addItemWithTitle:@"Close Tabs to the Right" action:@selector(takeTabsToCloseFrom:)   keyEquivalent:@""];
+	[menu addItem:[NSMenuItem separatorItem]];
+	[menu addItemWithTitle:@"Sticky"                  action:@selector(toggleSticky:)          keyEquivalent:@""];
 
-	NSIndexSet* indexSets[] = { newTabAtTab, nil, clickedTab, otherTabs, rightSideTabs, nil, total > 1 ? clickedTab : [NSIndexSet indexSet] };
+	NSIndexSet* indexSets[] = { newTabAtTab, total > 1 ? clickedTab : [NSIndexSet indexSet], nil, clickedTab, otherTabs, rightSideTabs, nil, clickedTab };
 	for(size_t i = 0; i < sizeofA(indexSets); ++i)
 	{
 		if(NSIndexSet* indexSet = indexSets[i])
-		{
-			if([indexSet count] == 0)
-					[[menu itemAtIndex:i] setEnabled:NO];
-			else	[[menu itemAtIndex:i] setRepresentedObject:indexSet];
-		}
+			[[menu itemAtIndex:i] setRepresentedObject:indexSet];
 	}
 
 	return menu;
@@ -1895,7 +1928,7 @@ namespace
 	}
 }
 
-- (IBAction)goToFileCounterpart:(id)sender
+- (IBAction)goToRelatedFile:(id)sender
 {
 	if(!_selectedDocument)
 		return;
@@ -1915,6 +1948,18 @@ namespace
 			candidates.insert(path::name(document->path()));
 	}
 
+	auto map = _selectedDocument->document_variables();
+	auto const& scm = _documentSCMVariables.empty() ? _projectSCMVariables : _documentSCMVariables;
+	map.insert(scm.begin(), scm.end());
+	if(self.projectPath)
+		map["projectDirectory"] = to_s(self.projectPath);
+
+	settings_t const settings = settings_for_path(_selectedDocument->virtual_path(), _selectedDocument->file_type() + " " + to_s(self.scopeAttributes), path::parent(documentPath), map);
+	std::string const customCandidate = settings.get(kSettingsRelatedFilePathKey, NULL_STR);
+
+	if(customCandidate != NULL_STR && customCandidate != documentPath && (std::find_if(_documents.begin(), _documents.end(), [&customCandidate](document::document_ptr const& doc){ return customCandidate == doc->path(); }) != _documents.end() || path::exists(customCandidate)))
+		return [self openItems:@[ @{ @"path" : [NSString stringWithCxxString:customCandidate] } ] closingOtherTabs:NO];
+
 	citerate(entry, path::entries(documentDir))
 	{
 		std::string const name = (*entry)->d_name;
@@ -1926,7 +1971,6 @@ namespace
 		}
 	}
 
-	settings_t const settings = settings_for_path(_selectedDocument->virtual_path(), _selectedDocument->file_type() + " " + to_s(self.scopeAttributes), _selectedDocument->path() != NULL_STR ? path::parent(_selectedDocument->path()) : to_s(self.untitledSavePath));
 	path::glob_t const excludeGlob(settings.get(kSettingsExcludeKey, ""));
 	path::glob_t const binaryGlob(settings.get(kSettingsBinaryKey, ""));
 
@@ -1938,7 +1982,11 @@ namespace
 	}
 
 	if(v.size() == 1)
-		return (void)NSBeep();
+	{
+		if(customCandidate == NULL_STR || customCandidate == documentPath)
+			return (void)NSBeep();
+		v.push_back(customCandidate);
+	}
 
 	std::vector<std::string>::const_iterator it = std::find(v.begin(), v.end(), documentName);
 	ASSERT(it != v.end());
@@ -2011,6 +2059,18 @@ namespace
 		[menuItem setTitle:self.window.firstResponder == self.textView ? @"Move Focus to File Browser" : @"Move Focus to Document"];
 	else if([menuItem action] == @selector(takeProjectPathFrom:))
 		[menuItem setState:[self.defaultProjectPath isEqualToString:[menuItem representedObject]] ? NSOnState : NSOffState];
+
+	SEL tabBarActions[] = { @selector(performCloseTab:), @selector(takeNewTabIndexFrom::), @selector(takeTabsToCloseFrom:), @selector(takeTabsToTearOffFrom:), @selector(toggleSticky:) };
+	if(oak::contains(std::begin(tabBarActions), std::end(tabBarActions), [menuItem action]))
+	{
+		if(NSIndexSet* indexSet = [self tryObtainIndexSetFrom:menuItem])
+		{
+			active = [indexSet count] != 0;
+			if(active && [menuItem action] == @selector(toggleSticky:))
+				[menuItem setState:_documents[[indexSet firstIndex]]->sticky() ? NSOnState : NSOffState];
+		}
+	}
+
 	return active;
 }
 
@@ -2139,6 +2199,8 @@ static NSUInteger DisableSessionSavingCount = 0;
 				doc = path ? document::create(to_s(path)) : create_untitled_document_in_folder(to_s(controller.untitledSavePath));
 				if(NSString* displayName = info[@"displayName"])
 					doc->set_custom_name(to_s(displayName));
+				if([info[@"sticky"] boolValue])
+					doc->set_sticky(true);
 			}
 
 			doc->set_recent_tracking(false);
@@ -2212,6 +2274,8 @@ static NSUInteger DisableSessionSavingCount = 0;
 				doc[@"displayName"] = [NSString stringWithCxxString:document->display_name()];
 			if(document == controller.selectedDocument)
 				doc[@"selected"] = @YES;
+			if(document->sticky())
+				doc[@"sticky"] = @YES;
 			[docs addObject:doc];
 		}
 		res[@"documents"] = docs;

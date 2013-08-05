@@ -45,11 +45,27 @@ namespace document
 
 	typedef std::shared_ptr<save_callback_t> save_callback_ptr;
 
+	struct inode_t
+	{
+		inode_t () { }
+		inode_t (dev_t device, ino_t inode, std::string const& path);
+		inode_t (std::string const& path);
+
+		operator bool () const { return valid; }
+		bool operator== (inode_t const& rhs) const { return valid == rhs.valid && inode == rhs.inode && device == rhs.device; }
+		bool operator!= (inode_t const& rhs) const { return valid != rhs.valid || inode != rhs.inode || device != rhs.device; }
+		bool operator< (inode_t const& rhs) const;
+
+		dev_t device = 0;
+		ino_t inode  = 0;
+		bool valid   = false;
+	};
+
 	struct PUBLIC document_t : std::enable_shared_from_this<document_t>
 	{
 		WATCH_LEAKS(document_t);
 
-		document_t () : _did_load_marks(false), _selection(NULL_STR), _folded(NULL_STR), _visible_rect(NULL_STR), _disable_callbacks(false), _revision(0), _disk_revision(0), _modified(false), _path(NULL_STR), _open_count(0), _has_lru(false), _is_on_disk(false), _recent_tracking(true), _backup_path(NULL_STR), _backup_revision(0), _virtual_path(NULL_STR), _custom_name(NULL_STR), _untitled_count(0), _file_type(NULL_STR), /*_folder(NULL_STR),*/ _disk_encoding(NULL_STR), _disk_newlines(NULL_STR), _disk_bom(false) { }
+		document_t () : _did_load_marks(false), _selection(NULL_STR), _folded(NULL_STR), _disable_callbacks(false), _revision(0), _disk_revision(0), _modified(false), _path(NULL_STR), _open_count(0), _has_lru(false), _is_on_disk(false), _recent_tracking(true), _backup_path(NULL_STR), _backup_revision(0), _virtual_path(NULL_STR), _custom_name(NULL_STR), _untitled_count(0), _file_type(NULL_STR), /*_folder(NULL_STR),*/ _disk_encoding(NULL_STR), _disk_newlines(NULL_STR), _disk_bom(false) { }
 		~document_t ();
 
 		bool operator== (document_t const& rhs) const { return _identifier == rhs._identifier; }
@@ -67,7 +83,7 @@ namespace document
 		// = Performing replacements (from outside a text view) =
 		// ======================================================
 
-		void replace (std::multimap<text::range_t, std::string> const& replacements);
+		void replace (std::multimap<std::pair<size_t, size_t>, std::string> const& replacements);
 
 		// ===================================================================
 		// = Controlling marks (bookmarks, warnings, errors, search matches) =
@@ -97,7 +113,7 @@ namespace document
 
 		std::string _selection;
 		std::string _folded;
-		std::string _visible_rect;
+		ng::index_t _visible_index;
 		io::bytes_ptr _content;
 
 		// ===============
@@ -227,10 +243,16 @@ namespace document
 		void set_disk_encoding (encoding::type const& encoding) { _disk_newlines = encoding.newlines(); _disk_encoding = encoding.charset(); _disk_bom = encoding.byte_order_mark(); }
 		encoding::type disk_encoding () const                   { return encoding::type(_disk_newlines, _disk_encoding, _disk_bom); }
 
+		void set_indent (text::indent_t const& indent);
+		text::indent_t const& indent () const;
+
 		encoding::type encoding_for_save_as_path (std::string const& path);
 
 		bool recent_tracking () const         { return _recent_tracking && _path != NULL_STR; }
 		void set_recent_tracking (bool flag)  { _recent_tracking = flag; }
+
+		bool sticky () const                  { return _sticky; }
+		void set_sticky (bool flag)           { _sticky = flag; }
 
 		ng::buffer_t& buffer ()               { ASSERT(_buffer); return *_buffer; }
 		ng::buffer_t const& buffer () const   { ASSERT(_buffer); return *_buffer; }
@@ -259,11 +281,11 @@ namespace document
 		void set_disk_revision (ssize_t rev)                { check_modified(rev, _revision);                                       }
 		std::string const& selection () const               { return _selection;                                                    }
 		std::string const& folded () const                  { return _folded;                                                       }
-		std::string visible_rect () const                   { return _visible_rect;                                                 }
+		ng::index_t visible_index () const                  { return _visible_index;                                                }
 
-		void set_selection (std::string const& sel)         { _selection = sel; _visible_rect = NULL_STR;                           }
+		void set_selection (std::string const& sel)         { _selection = sel; _visible_index = ng::index_t();                     }
 		void set_folded (std::string const& folded)         { _folded = folded;                                                     }
-		void set_visible_rect (std::string const& rect)     { _visible_rect = rect;                                                 }
+		void set_visible_index (ng::index_t index)          { _visible_index = index;                                               }
 
 		void set_authorization (osx::authorization_t const& auth) { _authorization = auth; }
 
@@ -278,11 +300,11 @@ namespace document
 		// ==============
 
 		friend document_ptr create (std::string const& path);
-		friend document_ptr from_content (std::string const& content, std::string const& fileType);
+		friend document_ptr from_content (std::string const& content, std::string fileType);
 		friend document_ptr find (oak::uuid_t const& uuid, bool searchBackups);
 
 		oak::uuid_t _identifier;              // to identify this document when there is no path
-		path::identifier_t _key;
+		inode_t _inode;
 		ssize_t _revision;
 		ssize_t _disk_revision;
 		bool _modified;
@@ -293,6 +315,7 @@ namespace document
 		mutable bool _has_lru;
 		bool _is_on_disk;
 		bool _recent_tracking;
+		bool _sticky = false;
 
 		mutable std::string _backup_path;     // if there is a backup, this is set — we can have a backup even when there is no path
 		mutable ssize_t _backup_revision;
@@ -319,6 +342,8 @@ namespace document
 		std::string _disk_newlines;
 		bool _disk_bom;
 
+		text::indent_t _indent;
+
 	protected: // so that we can trigger the callback in unit tests
 		watch_ptr _file_watcher;
 		friend struct watch_t;
@@ -327,7 +352,7 @@ namespace document
 
 	PUBLIC document_ptr create (std::string const& path = NULL_STR);
 	PUBLIC document_ptr find (oak::uuid_t const& uuid, bool searchBackups = false);
-	PUBLIC document_ptr from_content (std::string const& content, std::string const& fileType = NULL_STR);
+	PUBLIC document_ptr from_content (std::string const& content, std::string fileType = NULL_STR);
 
 	// ====================
 	// = Document scanner =

@@ -1,7 +1,8 @@
 #ifndef BUNDLES_H_Q267K08K
 #define BUNDLES_H_Q267K08K
 
-#include "index.h"
+#include "item.h"
+#include "load.h"
 #include "wrappers.h"
 #include "locations.h"
 #include "query.h"

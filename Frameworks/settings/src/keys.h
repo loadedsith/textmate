@@ -4,6 +4,7 @@
 #include <oak/misc.h>
 
 PUBLIC extern std::string const kSettingsFileTypeKey;
+PUBLIC extern std::string const kSettingsRelatedFilePathKey;
 
 PUBLIC extern std::string const kSettingsTabSizeKey;
 PUBLIC extern std::string const kSettingsSoftTabsKey;

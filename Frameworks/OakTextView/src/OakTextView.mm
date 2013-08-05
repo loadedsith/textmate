@@ -341,14 +341,19 @@ static std::string shell_quote (std::vector<std::string> paths)
 - (NSString*)findString      { return [[OakPasteboard pasteboardWithName:NSFindPboard] current].string;    }
 - (NSString*)replaceString   { return [[OakPasteboard pasteboardWithName:NSReplacePboard] current].string; }
 
-- (void)didFind:(NSUInteger)aNumber occurrencesOf:(NSString*)aFindString atPosition:(text::pos_t const&)aPosition
+- (void)didFind:(NSUInteger)aNumber occurrencesOf:(NSString*)aFindString atPosition:(text::pos_t const&)aPosition wrapped:(BOOL)didWrap
 {
-	static NSString* const formatStrings[2][3] = {
-		{ @"No more occurrences of “%@”.", nil, @"%2$ld occurrences of “%@”." },
-		{ @"No more matches for “%@”.",    nil, @"%2$ld matches for “%@”."    },
-	};
-	if(NSString* format = formatStrings[(self.findOptions & find::regular_expression) ? 1 : 0][aNumber > 2 ? 2 : aNumber])
-		OakShowToolTip([NSString stringWithFormat:format, aFindString, aNumber], [self.textView positionForWindowUnderCaret]);
+	NSString* format = nil;
+	switch(aNumber)
+	{
+		case 0:  format = @"No more %@ “%@”.";                break;
+		case 1:  format = didWrap ? @"Search wrapped." : nil; break;
+		default: format = @"%3$ld %@ “%@”.";                  break;
+	}
+
+	NSString* classifier = (self.findOptions & find::regular_expression) ? @"matches for" : @"occurrences of";
+	if(format)
+		OakShowToolTip([NSString stringWithFormat:format, classifier, aFindString, aNumber], [self.textView positionForWindowUnderCaret]);
 }
 
 - (void)didReplace:(NSUInteger)aNumber occurrencesOf:(NSString*)aFindString with:(NSString*)aReplacementString
@@ -427,6 +432,24 @@ static std::string shell_quote (std::vector<std::string> paths)
 	}
 }
 
+- (void)scrollIndexToFirstVisible:(ng::index_t const&)visibleIndex
+{
+	if(layout && visibleIndex && visibleIndex.index < document->buffer().size())
+	{
+		layout->update_metrics(CGRectMake(0, CGRectGetMinY(layout->rect_at_index(visibleIndex)), CGFLOAT_MAX, NSHeight([self visibleRect])));
+		[self reflectDocumentSize];
+
+		CGRect rect = layout->rect_at_index(visibleIndex);
+		if(CGRectGetMinX(rect) <= layout->margin().left)
+			rect.origin.x = 0;
+		if(CGRectGetMinY(rect) <= layout->margin().top)
+			rect.origin.y = 0;
+		rect.size = [self visibleRect].size;
+
+		[self scrollRectToVisible:CGRectIntegral(rect)];
+	}
+}
+
 - (void)setDocument:(document::document_ptr const&)aDocument
 {
 	if(document && aDocument && *document == *aDocument)
@@ -449,6 +472,7 @@ static std::string shell_quote (std::vector<std::string> paths)
 	{
 		document->buffer().remove_callback(callback);
 		document->set_folded(layout->folded_as_string());
+		document->set_visible_index(layout->index_at_point([self visibleRect].origin));
 
 		delete callback;
 		callback = NULL;
@@ -496,7 +520,7 @@ static std::string shell_quote (std::vector<std::string> paths)
 		editor->set_find_clipboard(get_clipboard(NSFindPboard));
 		editor->set_replace_clipboard(get_clipboard(NSReplacePboard));
 
-		std::string const visibleRect = document->visible_rect();
+		ng::index_t visibleIndex = document->visible_index();
 		if(document->selection() != NULL_STR)
 		{
 			ng::ranges_t ranges = convert(document->buffer(), document->selection());
@@ -508,8 +532,8 @@ static std::string shell_quote (std::vector<std::string> paths)
 		[self reflectDocumentSize];
 		[self updateSelection];
 
-		if(visibleRect != NULL_STR)
-				[self scrollRectToVisible:NSRectFromString([NSString stringWithCxxString:visibleRect])];
+		if(visibleIndex && visibleIndex.index < document->buffer().size())
+				[self scrollIndexToFirstVisible:visibleIndex];
 		else	[self ensureSelectionIsInVisibleArea:self];
 
 		document->buffer().add_callback(callback);
@@ -565,7 +589,10 @@ static std::string shell_quote (std::vector<std::string> paths)
 		[self performBundleItem:*item];
 
 	if(document && layout)
+	{
 		document->set_folded(layout->folded_as_string());
+		document->set_visible_index(layout->index_at_point([self visibleRect].origin));
+	}
 }
 
 - (void)documentDidSave:(NSNotification*)aNotification
@@ -1453,6 +1480,7 @@ static void update_menu_key_equivalents (NSMenu* menu, action_to_key_t const& ac
 - (void)keyDown:(NSEvent*)anEvent
 {
 	D(DBF_OakTextView_TextInput, bug("%s\n", [[anEvent description] UTF8String]););
+	crash_reporter_info_t info(text::format("%s %s", sel_getName(_cmd), to_s(anEvent).c_str()));
 	AUTO_REFRESH;
 	if(!choiceMenu)
 		return [self oldKeyDown:anEvent];
@@ -1833,7 +1861,8 @@ static void update_menu_key_equivalents (NSMenu* menu, action_to_key_t const& ac
 			if(documents && [documents count] > 1)
 				options &= ~find::wrap_around;
 
-			auto allMatches = ng::find(document->buffer(), editor->ranges(), findStr, options, onlyInSelection ? editor->ranges() : ng::ranges_t());
+			bool didWrap = false;
+			auto allMatches = ng::find(document->buffer(), editor->ranges(), findStr, options, onlyInSelection ? editor->ranges() : ng::ranges_t(), &didWrap);
 
 			ng::ranges_t res;
 			std::transform(allMatches.begin(), allMatches.end(), std::back_inserter(res), [](decltype(allMatches)::value_type const& p){ return p.first; });
@@ -1870,7 +1899,7 @@ static void update_menu_key_equivalents (NSMenu* menu, action_to_key_t const& ac
 
 			if(isCounting)
 			{
-				[aFindServer didFind:res.size() occurrencesOf:aFindServer.findString atPosition:res.size() == 1 ? document->buffer().convert(res.last().min().index) : text::pos_t::undefined];
+				[aFindServer didFind:res.size() occurrencesOf:aFindServer.findString atPosition:res.size() == 1 ? document->buffer().convert(res.last().min().index) : text::pos_t::undefined wrapped:NO];
 			}
 			else
 			{
@@ -1898,7 +1927,7 @@ static void update_menu_key_equivalents (NSMenu* menu, action_to_key_t const& ac
 				}
 
 				[self highlightRanges:newSelection];
-				[aFindServer didFind:newSelection.size() occurrencesOf:aFindServer.findString atPosition:res.size() == 1 ? document->buffer().convert(res.last().min().index) : text::pos_t::undefined];
+				[aFindServer didFind:newSelection.size() occurrencesOf:aFindServer.findString atPosition:res.size() == 1 ? document->buffer().convert(res.last().min().index) : text::pos_t::undefined wrapped:didWrap];
 			}
 		}
 		break;
@@ -2233,8 +2262,8 @@ static char const* kOakMenuItemTitle = "OakMenuItemTitle";
 
 - (theme_ptr const&)theme     { return theme; }
 - (NSFont*)font               { return [NSFont fontWithName:[NSString stringWithCxxString:fontName] size:fontSize]; }
-- (size_t)tabSize             { return document ? document->buffer().indent().tab_size() : 2; }
-- (BOOL)softTabs              { return document ? document->buffer().indent().soft_tabs() : NO; }
+- (size_t)tabSize             { return document ? document->indent().tab_size() : 2; }
+- (BOOL)softTabs              { return document ? document->indent().soft_tabs() : NO; }
 - (BOOL)softWrap              { return layout && layout->wrapping(); }
 
 - (BOOL)continuousIndentCorrections
@@ -2260,7 +2289,9 @@ static char const* kOakMenuItemTitle = "OakMenuItemTitle";
 	if(layout)
 	{
 		AUTO_REFRESH;
+		ng::index_t visibleIndex = layout->index_at_point([self visibleRect].origin);
 		layout->set_font(fontName, fontSize);
+		[self scrollIndexToFirstVisible:document->buffer().begin(document->buffer().convert(visibleIndex.index).line)];
 	}
 }
 
@@ -2268,7 +2299,11 @@ static char const* kOakMenuItemTitle = "OakMenuItemTitle";
 {
 	AUTO_REFRESH;
 	if(document)
-		document->buffer().indent().set_tab_size(newTabSize);
+	{
+		text::indent_t tmp = document->indent();
+		tmp.set_tab_size(newTabSize);
+		document->set_indent(tmp);
+	}
 }
 
 - (void)setShowInvisibles:(BOOL)flag
@@ -2299,14 +2334,20 @@ static char const* kOakMenuItemTitle = "OakMenuItemTitle";
 		return;
 
 	AUTO_REFRESH;
+	ng::index_t visibleIndex = layout->index_at_point([self visibleRect].origin);
 	layout->set_wrapping(flag, wrapColumn);
+	[self scrollIndexToFirstVisible:document->buffer().begin(document->buffer().convert(visibleIndex.index).line)];
 	settings_t::set(kSettingsSoftWrapKey, (bool)flag, document->file_type());
 }
 
 - (void)setSoftTabs:(BOOL)flag
 {
 	if(flag != self.softTabs)
-		document->buffer().indent().set_soft_tabs(flag);
+	{
+		text::indent_t tmp = document->indent();
+		tmp.set_soft_tabs(flag);
+		document->set_indent(tmp);
+	}
 }
 
 - (void)setWrapColumn:(NSInteger)newWrapColumn
@@ -2503,7 +2544,6 @@ static char const* kOakMenuItemTitle = "OakMenuItemTitle";
 	{
 		bool inputWasSelection = false;
 		text::range_t inputRange = ng::write_unit_to_fd(document->buffer(), editor->ranges().last(), document->buffer().indent().tab_size(), process.in, inputUnit, input::entire_document, input_format::text, scope::selector_t(), environment, &inputWasSelection);
-		close(process.in);
 
 		__block int status = 0;
 		__block std::string output, error;

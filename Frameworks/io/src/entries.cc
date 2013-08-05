@@ -1,6 +1,7 @@
 #include "entries.h"
 #include "path.h"
 #include <regexp/glob.h>
+#include <text/format.h>
 
 namespace path
 {
@@ -43,9 +44,17 @@ namespace path
 						else if(S_ISLNK(buf.st_mode))
 							entries[i]->d_type = DT_LNK;
 					}
+					else
+					{
+						perror(text::format("lstat(“%s/%s”)", path.c_str(), entries[i]->d_name).c_str());
+					}
 				}
 			}
 			_helper.reset(new helper_t(entries, size, actual));
+		}
+		else
+		{
+			perror(text::format("scandir(\"%s\")", path.c_str()).c_str());
 		}
 	}
 

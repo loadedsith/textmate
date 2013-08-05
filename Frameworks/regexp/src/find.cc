@@ -1,6 +1,6 @@
 #include "find.h"
 #include "private.h"
-#include "oniguruma.h"
+#include <Onigmo/oniguruma.h>
 #include <text/utf8.h>
 #include <cf/cf.h>
 
@@ -312,7 +312,7 @@ namespace find
 			last_end = 0;
 
 			OnigErrorInfo einfo;
-			int r = onig_new(&compiled_pattern, str.data(), str.data() + str.size(), (options & ignore_case ? ONIG_OPTION_IGNORECASE : 0) | ONIG_OPTION_CAPTURE_GROUP, ONIG_ENCODING_UTF8, ONIG_SYNTAX_RUBY, &einfo);
+			int r = onig_new(&compiled_pattern, (OnigUChar const*)str.data(), (OnigUChar const*)str.data() + str.size(), (options & ignore_case ? ONIG_OPTION_IGNORECASE : 0) | ONIG_OPTION_CAPTURE_GROUP, ONIG_ENCODING_UTF8, ONIG_SYNTAX_DEFAULT, &einfo);
 			if(r != ONIG_NORMAL)
 			{
 				OnigUChar s[ONIG_MAX_ERROR_MESSAGE_LEN];
@@ -357,14 +357,14 @@ namespace find
 
 				if(last_beg == buffer.size()) // last match was zero-width and end-of-buffer
 					return res;
-				else if(last_beg == last_end) // last match was zero-width, so advance one character to not repeat it
-					++last_end;
+				else if(last_beg == last_end && last_end < buffer.size()) // last match was zero-width, so advance one character to not repeat it
+					last_end += utf8::multibyte<char>::is_start(buffer[last_end]) ? std::min(utf8::multibyte<char>::length(buffer[last_end]), buffer.size() - last_end) : 1;
 
-				char const* first = &buffer[0];
-				char const* last = first + buffer.size();
+				OnigUChar const* first = (OnigUChar const*)&buffer[0];
+				OnigUChar const* last = first + buffer.size();
 
-				char const* range_start = first + last_end;
-				char const* range_stop = last - skip_last;
+				OnigUChar const* range_start = first + last_end;
+				OnigUChar const* range_stop = last - skip_last;
 				if(options & backwards)
 					std::swap(range_start, range_stop);
 
@@ -411,7 +411,7 @@ namespace find
 		}
 
 	private:
-		regex_t* compiled_pattern;
+		OnigRegex compiled_pattern;
 		options_t options;
 		std::vector<char> buffer;
 		int last_beg, last_end;

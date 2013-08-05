@@ -1,5 +1,5 @@
 #import "BundlesManager.h"
-#import "load_bundles.h"
+#import <bundles/load.h>
 #import "InstallBundleItems.h"
 #import <OakFoundation/NSDate Additions.h>
 #import <OakFoundation/NSString Additions.h>
@@ -31,7 +31,7 @@ static double const kPollInterval = 3*60*60;
 	std::vector<std::string> bundlesPaths;
 	std::string bundlesIndexPath;
 	std::set<std::string> watchList;
-	fs::cache_t cache;
+	plist::cache_t cache;
 }
 @property (nonatomic) NSString* activityText;
 @property (nonatomic) BOOL      isBusy;
@@ -57,11 +57,6 @@ static double const kPollInterval = 3*60*60;
 	{
 		sourceList   = bundles_db::sources();
 		bundlesIndex = bundles_db::index(kInstallDirectory);
-
-		// remove old cache files
-		unlink(path::join(path::home(), "Library/Application Support/TextMate/Cache/FSNodes.plist").c_str());
-		unlink(path::join(path::home(), "Library/Application Support/TextMate/Cache/PropertyValues.plist").c_str());
-		rmdir(path::join(path::home(), "Library/Application Support/TextMate/Cache").c_str());
 	}
 	return self;
 }
@@ -223,15 +218,11 @@ static double const kPollInterval = 3*60*60;
 			for(auto bundle : failedBundles)
 				fprintf(stderr, "*** error downloading ‘%s’\n", bundle->url().c_str());
 
-			std::set<std::string> paths;
 			for(auto bundle : bundles)
 			{
+				[self reloadPath:[NSString stringWithCxxString:bundle->path()] recursive:YES];
 				installing.erase(bundle->uuid());
-				paths.insert(path::parent(bundle->path()));
 			}
-
-			for(auto path : paths)
-				[self reloadPath:[NSString stringWithCxxString:path]];
 
 			callback(failedBundles);
 			[[NSNotificationCenter defaultCenter] postNotificationName:BundlesManagerBundlesDidChangeNotification object:self];
@@ -294,9 +285,8 @@ static double const kPollInterval = 3*60*60;
 
 - (void)uninstallBundle:(bundles_db::bundle_ptr const&)aBundle
 {
-	auto path = path::parent(aBundle->path());
 	bundles_db::uninstall(aBundle);
-	[self reloadPath:[NSString stringWithCxxString:path]];
+	[self erasePath:[NSString stringWithCxxString:aBundle->path()]];
 	bundles_db::save_index(bundlesIndex, kInstallDirectory);
 	self.activityText = [NSString stringWithFormat:@"Uninstalled ‘%@’.", [NSString stringWithCxxString:aBundle->name()]];
 }
@@ -386,7 +376,7 @@ static double const kPollInterval = 3*60*60;
 		void did_change (std::string const& path, std::string const& observedPath, uint64_t eventId, bool recursive)
 		{
 			D(DBF_BundlesManager_FSEvents, bug("%s (observing ‘%s’)\n", path.c_str(), observedPath.c_str()););
-			[[BundlesManager sharedInstance] reloadPath:[NSString stringWithCxxString:path]];
+			[[BundlesManager sharedInstance] reloadPath:[NSString stringWithCxxString:path] recursive:recursive];
 			[[BundlesManager sharedInstance] setEventId:eventId forPath:[NSString stringWithCxxString:observedPath]];
 		}
 	};
@@ -412,10 +402,29 @@ static double const kPollInterval = 3*60*60;
 	}
 }
 
-- (void)reloadPath:(NSString*)aPath
+- (void)erasePath:(NSString*)aPath
 {
 	D(DBF_BundlesManager, bug("%s\n", [aPath UTF8String]););
-	if(cache.reload(to_s(aPath)))
+	if(cache.erase(to_s(aPath)))
+	{
+		self.needsCreateBundlesIndex = YES;
+		self.needsSaveBundlesIndex   = YES;
+	}
+	else
+	{
+		D(DBF_BundlesManager, bug("no changes\n"););
+	}
+}
+
+- (void)reloadPath:(NSString*)aPath
+{
+	[self reloadPath:aPath recursive:NO];
+}
+
+- (void)reloadPath:(NSString*)aPath recursive:(BOOL)flag
+{
+	D(DBF_BundlesManager, bug("%s\n", [aPath UTF8String]););
+	if(cache.reload(to_s(aPath), flag))
 	{
 		self.needsCreateBundlesIndex = YES;
 		self.needsSaveBundlesIndex   = YES;

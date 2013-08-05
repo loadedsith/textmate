@@ -105,6 +105,20 @@ static NSProgressIndicator* OakCreateProgressIndicator ()
 	return res;
 }
 
+static NSButton* OakCreateStopSearchButton ()
+{
+	NSButton* res     = [[NSButton alloc] initWithFrame:NSZeroRect];
+	res.buttonType    = NSMomentaryChangeButton;
+	res.bordered      = NO;
+	res.image         = [NSImage imageNamed:NSImageNameStopProgressFreestandingTemplate];
+	res.imagePosition = NSImageOnly;
+	res.toolTip       = @"Stop Search";
+	res.keyEquivalent = @".";
+	res.keyEquivalentModifierMask = NSCommandKeyMask;
+	[res.cell setImageScaling:NSImageScaleProportionallyDown];
+	return res;
+}
+
 @interface FindWindowController () <NSTextFieldDelegate, NSWindowDelegate, NSMenuDelegate>
 {
 	BOOL _wrapAround;
@@ -145,6 +159,7 @@ static NSProgressIndicator* OakCreateProgressIndicator ()
 @property (nonatomic, readwrite) NSButton*      replaceAndFindButton;
 @property (nonatomic, readwrite) NSButton*      findPreviousButton;
 @property (nonatomic, readwrite) NSButton*      findNextButton;
+@property (nonatomic, readwrite) NSButton*      stopSearchButton;
 
 @property (nonatomic) NSPopover*                findStringPopver;
 
@@ -212,6 +227,7 @@ static NSProgressIndicator* OakCreateProgressIndicator ()
 		self.replaceAndFindButton      = OakCreateButton(@"Replace & Find");
 		self.findPreviousButton        = OakCreateButton(@"Previous");
 		self.findNextButton            = OakCreateButton(@"Next");
+		self.stopSearchButton          = OakCreateStopSearchButton();
 
 		[self updateSearchInPopUpMenu];
 
@@ -252,6 +268,7 @@ static NSProgressIndicator* OakCreateProgressIndicator ()
 		self.replaceAndFindButton.action  = @selector(replaceAndFind:);
 		self.findPreviousButton.action    = @selector(findPrevious:);
 		self.findNextButton.action        = @selector(findNext:);
+		self.stopSearchButton.action      = @selector(stopSearch:);
 
 		self.objectController = [[NSObjectController alloc] initWithContent:self];
 		self.globHistoryList  = [[OakHistoryList alloc] initWithName:@"Find in Folder Globs.default" stackSize:10 defaultItems:@"*", @"*.txt", @"*.{c,h}", nil];
@@ -278,7 +295,7 @@ static NSProgressIndicator* OakCreateProgressIndicator ()
 			[contentView addSubview:view];
 		}
 
-		for(NSView* view in @[ self.resultsTopDivider, self.resultsScrollView, self.resultsBottomDivider, self.progressIndicator ])
+		for(NSView* view in @[ self.resultsTopDivider, self.resultsScrollView, self.resultsBottomDivider, self.stopSearchButton, self.progressIndicator ])
 			[view setTranslatesAutoresizingMaskIntoConstraints:NO];
 
 		[self updateConstraints];
@@ -362,6 +379,7 @@ static NSProgressIndicator* OakCreateProgressIndicator ()
 		NSMutableDictionary* dict = [NSMutableDictionary dictionaryWithDictionary:views];
 		[dict addEntriesFromDictionary:@{
 			@"busy" : self.progressIndicator,
+			@"stopSearch" : self.stopSearchButton,
 		}];
 		views = dict;
 	}
@@ -418,7 +436,7 @@ static NSProgressIndicator* OakCreateProgressIndicator ()
 
 	if(self.isBusy)
 	{
-		CONSTRAINT(@"H:|-[busy]-[status]-|", NSLayoutFormatAlignAllCenterY);
+		CONSTRAINT(@"H:|-[stopSearch(==13)]-(==6)-[busy]-[status]-|", NSLayoutFormatAlignAllCenterY);
 	}
 	else
 	{
@@ -546,33 +564,6 @@ static NSProgressIndicator* OakCreateProgressIndicator ()
 - (void)windowWillClose:(NSNotification*)aNotification
 {
 	[self commitEditing];
-}
-
-- (BOOL)windowShouldClose:(id)sender
-{
-	if(self.window.isDocumentEdited)
-	{
-		[self showSaveChangesAlertAndCallback:^{ [self close]; }];
-		return NO;
-	}
-	return YES;
-}
-
-- (void)showSaveChangesAlertAndCallback:(void(^)())callback
-{
-	NSAlert* alert = [NSAlert tmAlertWithMessageText:@"Do you want to save the changes from your replace operation?" informativeText:@"Your changes will be lost if you don’t save them." buttons:@"Save All", @"Cancel", @"Don’t Save", nil];
-	OakShowAlertForWindow(alert, self.window, ^(NSInteger returnCode){
-		if(returnCode == NSAlertFirstButtonReturn) // Save All
-		{
-			[NSApp sendAction:@selector(saveAllDocuments:) to:self.nextResponder from:self];
-			callback();
-		}
-		else if(returnCode == NSAlertThirdButtonReturn) // Discard
-		{
-			self.window.documentEdited = NO; // FIXME Actually undo replacements
-			callback();
-		}
-	});
 }
 
 // ==============================
@@ -787,11 +778,13 @@ static NSProgressIndicator* OakCreateProgressIndicator ()
 
 	if(_busy = busyFlag)
 	{
+		[self.window.contentView addSubview:self.stopSearchButton];
 		[self.window.contentView addSubview:self.progressIndicator];
 		[self.progressIndicator startAnimation:self];
 	}
 	else
 	{
+		[self.stopSearchButton removeFromSuperview];
 		[self.progressIndicator stopAnimation:self];
 		[self.progressIndicator removeFromSuperview];
 	}

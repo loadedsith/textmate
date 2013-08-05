@@ -15,6 +15,7 @@
 #include <plist/ascii.h>
 #include <selection/selection.h>
 #include <OakSystem/application.h>
+#include <CrashReporter/utility.h>
 #include <oak/debug.h>
 #include <text/utf8.h>
 #include <text/ctype.h>
@@ -140,157 +141,69 @@ namespace document
 	// = Document Tracker =
 	// ====================
 
-	static OSSpinLock spinlock = 0;
-	static pthread_t MainThread = pthread_self();
+	static bool is_inode_valid (ino_t inode, std::string const& path)
+	{
+		if(inode == 999999999) // Zero-length files on FAT file systems share this magic value
+		{
+			struct statfs sfsb;
+			if(statfs(path.c_str(), &sfsb) == 0)
+				return strcasecmp(sfsb.f_fstypename, "msdos") == 0 && strcasecmp(sfsb.f_fstypename, "exfat") == 0;
+			perror("statfs");
+		}
+		return true;
+	}
+
+	inode_t::inode_t (dev_t device, ino_t inode, std::string const& path) : device(device), inode(inode), valid(true)
+	{
+		if(!is_inode_valid(inode, path))
+		{
+			device = 0;
+			inode  = 0;
+			valid  = false;
+		}
+	}
+
+	inode_t::inode_t (std::string const& path)
+	{
+		struct stat buf;
+		if(lstat(path.c_str(), &buf) == 0)
+		{
+			if(is_inode_valid(buf.st_ino, path))
+			{
+				device = buf.st_dev;
+				inode  = buf.st_ino;
+				valid  = true;
+			}
+		}
+	}
+
+	bool inode_t::operator< (inode_t const& rhs) const
+	{
+		return std::make_tuple(valid ? 1 : 0, inode, device) < std::make_tuple(rhs.valid ? 1 : 0, rhs.inode, rhs.device);
+	}
 
 	static struct document_tracker_t
 	{
-		ssize_t lock_count;
-		document_tracker_t () : lock_count(0) { }
-
-		struct lock_t
+		std::vector<document_ptr> all_documents ()
 		{
-			lock_t (document_tracker_t* tracker) : tracker(tracker), locked(false) { retain(); }
-			~lock_t ()                                                             { release(); }
+			std::lock_guard<std::mutex> lock(_lock);
 
-			void retain ()  { OSSpinLockLock(&spinlock); DB(++tracker->lock_count); locked = true; };
-			void release () { if(!locked) return; DB(--tracker->lock_count); OSSpinLockUnlock(&spinlock); locked = false; }
-
-		private:
-			document_tracker_t* tracker;
-			bool locked;
-		};
-
-		document_ptr create (std::string const& path, path::identifier_t const& key)
-		{
-			lock_t lock(this);
-			D(DBF_Document_Tracker, bug("%s\n", path.c_str()););
-
-			std::map<path::identifier_t, document_weak_ptr>::const_iterator it = documents_by_path.find(key);
-			if(it != documents_by_path.end())
+			std::vector<document_ptr> res;
+			for(auto pair : _documents_by_uuid)
 			{
-				if(document_ptr res = it->second.lock())
-				{
-					D(DBF_Document_Tracker, bug("re-use instance (%s)\n", res->path().c_str()););
-					lock.release();
-					if(pthread_self() == MainThread)
-						res->set_path(path);
-					return res;
-				}
-				else
-				{
-					D(DBF_Document_Tracker, bug("*** old instance gone\n"););
-				}
+				if(document_ptr doc = pair.second->document.lock())
+					res.push_back(doc);
 			}
-
-			document_ptr res = document_ptr(new document_t);
-			res->_identifier.generate();
-			res->_path = path;
-			res->_key  = key;
-
-			add(res);
 			return res;
-		}
-
-		document_ptr find (oak::uuid_t const& uuid, bool searchBackups)
-		{
-			lock_t lock(this);
-			D(DBF_Document_Tracker, bug("%s\n", to_s(uuid).c_str()););
-			std::map<oak::uuid_t, document_weak_ptr>::const_iterator it = documents.find(uuid);
-			if(it != documents.end())
-			{
-				if(document_ptr res = it->second.lock())
-				{
-					D(DBF_Document_Tracker, bug("re-use instance\n"););
-					return res;
-				}
-				else
-				{
-					D(DBF_Document_Tracker, bug("*** old instance gone\n"););
-				}
-			}
-
-			for(auto dirEntry : path::entries(session_dir()))
-			{
-				std::string const path = path::join(session_dir(), dirEntry->d_name);
-				std::string const attr = path::get_attr(path, "com.macromates.backup.identifier");
-				if(attr != NULL_STR && uuid == oak::uuid_t(attr))
-				{
-					document_ptr res = document_ptr(new document_t);
-
-					res->_identifier     = uuid;
-					res->_backup_path    = path;
-
-					res->_path           = path::get_attr(path, "com.macromates.backup.path");
-					res->_key            = path::identifier_t(res->_path);
-					res->_file_type      = path::get_attr(path, "com.macromates.backup.file-type");
-					res->_disk_encoding  = path::get_attr(path, "com.macromates.backup.encoding");
-					res->_disk_bom       = path::get_attr(path, "com.macromates.backup.bom") == "YES";
-					res->_disk_newlines  = path::get_attr(path, "com.macromates.backup.newlines");
-					res->_untitled_count = atoi(path::get_attr(path, "com.macromates.backup.untitled-count").c_str());
-					res->_custom_name    = path::get_attr(path, "com.macromates.backup.custom-name");
-					res->_modified       = path::get_attr(path, "com.macromates.backup.modified") == "YES";
-
-					add(res);
-					return res;
-				}
-			}
-			D(DBF_Document_Tracker, bug("no instance found\n"););
-			return document_ptr();
-		}
-
-		void remove (oak::uuid_t const& uuid, path::identifier_t const& key)
-		{
-			lock_t lock(this);
-			D(DBF_Document_Tracker, bug("%s, %s\n", to_s(uuid).c_str(), to_s(key).c_str()););
-			if(key)
-			{
-				std::map<path::identifier_t, document_weak_ptr>::iterator it = documents_by_path.find(key);
-				ASSERTF(it != documents_by_path.end(), "%s, %s", to_s(key).c_str(), to_s(uuid).c_str());
-				if(!it->second.lock())
-				{
-					documents_by_path.erase(it);
-				}
-				else
-				{
-					D(DBF_Document_Tracker, bug("*** old instance replaced\n"););
-				}
-			}
-			ASSERT(documents.find(uuid) != documents.end());
-			documents.erase(uuid);
-		}
-
-		path::identifier_t const& update_path (document_ptr doc, path::identifier_t const& oldKey, path::identifier_t const& newKey)
-		{
-			lock_t lock(this);
-			D(DBF_Document_Tracker, bug("%s → %s\n", to_s(oldKey).c_str(), to_s(newKey).c_str()););
-			if(oldKey)
-			{
-				ASSERT(documents_by_path.find(oldKey) != documents_by_path.end());
-				documents_by_path.erase(oldKey);
-			}
-
-			if(newKey)
-			{
-				ASSERT(documents_by_path.find(newKey) == documents_by_path.end());
-				documents_by_path.insert(std::make_pair(newKey, doc));
-			}
-
-			return newKey;
 		}
 
 		size_t untitled_counter ()
 		{
-			lock_t lock(this);
-
 			std::set<size_t> reserved;
-			iterate(pair, documents)
+			for(auto doc : all_documents())
 			{
-				if(document_ptr doc = pair->second.lock())
-				{
-					if(doc->path() == NULL_STR && doc->custom_name() == NULL_STR)
-						reserved.insert(doc->untitled_count());
-				}
+				if(doc->path() == NULL_STR && doc->custom_name() == NULL_STR)
+					reserved.insert(doc->untitled_count());
 			}
 
 			size_t res = 1;
@@ -299,51 +212,208 @@ namespace document
 			return res;
 		}
 
-		std::vector<document_ptr> all_documents ()
+		document_ptr create (std::string const& path, inode_t const& inode)
 		{
-			std::vector<document_ptr> res;
+			std::lock_guard<std::mutex> lock(_lock);
+			D(DBF_Document_Tracker, bug("%s (%llu, %d)\n", path.c_str(), inode.inode, inode.device););
 
-			lock_t lock(this);
-			for(auto pair : documents)
+			auto pathIter = _documents_by_path.find(path);
+			if(pathIter != _documents_by_path.end())
 			{
-				if(document_ptr doc = pair.second.lock())
-					res.push_back(doc);
+				D(DBF_Document_Tracker, bug("re-use document with same path\n"););
+				if(document_ptr res = pathIter->second->document.lock())
+				{
+					if(pathIter->second->inode != inode)
+					{
+						// TODO If inode has changed, we should check document content against the disk
+						D(DBF_Document_Tracker, bug("update inode %llu → %llu\n", pathIter->second->inode.inode, inode.inode););
+						remove_no_lock(res->identifier());
+						res->_inode = inode;
+						add_no_lock(res);
+					}
+					return res;
+				}
+				ASSERT(false);
 			}
 
+			auto inodeIter = _documents_by_inode.find(inode);
+			if(inodeIter != _documents_by_inode.end())
+			{
+				D(DBF_Document_Tracker, bug("re-use document with different path ‘%s’\n", inodeIter->second->path.c_str()););
+				// TODO If the old path no longer exist, we should update document’s path
+				if(document_ptr res = inodeIter->second->document.lock())
+					return res;
+				ASSERT(false);
+			}
+
+			D(DBF_Document_Tracker, bug("nothing found, create new document\n"););
+			document_ptr res = document_ptr(new document_t);
+			res->_identifier.generate();
+			res->_path  = path;
+			res->_inode = inode;
+
+			add_no_lock(res);
 			return res;
 		}
 
-	private:
-		std::map<oak::uuid_t, document_weak_ptr> documents;
-		std::map<path::identifier_t, document_weak_ptr> documents_by_path;
-
-		void add (document_ptr doc)
+		document_ptr find (oak::uuid_t const& uuid, bool searchBackups)
 		{
-			ASSERT_EQ(lock_count, 1); // we assert that a lock has been obtained by the caller
-			documents.insert(std::make_pair(doc->identifier(), doc));
-			if(doc->_key)
+			std::lock_guard<std::mutex> lock(_lock);
+			D(DBF_Document_Tracker, bug("%s\n", to_s(uuid).c_str()););
+
+			auto uuidIter = _documents_by_uuid.find(uuid);
+			if(uuidIter != _documents_by_uuid.end())
 			{
-				D(DBF_Document_Tracker, bug("%s\n", doc->path().c_str()););
-				std::map<path::identifier_t, document_weak_ptr>::iterator it = documents_by_path.find(doc->_key);
-				ASSERTF(it == documents_by_path.end() || !it->second.lock(), "%s, %s\n", to_s(doc->_key).c_str(), to_s(doc->identifier()).c_str());
-				if(it == documents_by_path.end())
-						documents_by_path.insert(std::make_pair(doc->_key, doc));
-				else  it->second = doc;
+				D(DBF_Document_Tracker, bug("re-use document with path ‘%s’\n", uuidIter->second->path.c_str()););
+				if(document_ptr res = uuidIter->second->document.lock())
+					return res;
+				ASSERT(false);
 			}
+
+			for(auto dirEntry : path::entries(session_dir()))
+			{
+				std::string const path = path::join(session_dir(), dirEntry->d_name);
+				std::string const attr = path::get_attr(path, "com.macromates.backup.identifier");
+				if(attr != NULL_STR && uuid == oak::uuid_t(attr))
+				{
+					D(DBF_Document_Tracker, bug("found backup with path ‘%s’\n", path.c_str()););
+					document_ptr res = document_ptr(new document_t);
+
+					res->_identifier     = uuid;
+					res->_backup_path    = path;
+
+					res->_path           = path::get_attr(path, "com.macromates.backup.path");
+					res->_inode          = inode_t(res->_path);
+					res->_file_type      = path::get_attr(path, "com.macromates.backup.file-type");
+					res->_disk_encoding  = path::get_attr(path, "com.macromates.backup.encoding");
+					res->_disk_bom       = path::get_attr(path, "com.macromates.backup.bom") == "YES";
+					res->_disk_newlines  = path::get_attr(path, "com.macromates.backup.newlines");
+					res->_untitled_count = atoi(path::get_attr(path, "com.macromates.backup.untitled-count").c_str());
+					res->_custom_name    = path::get_attr(path, "com.macromates.backup.custom-name");
+					res->_modified       = path::get_attr(path, "com.macromates.backup.modified") == "YES";
+
+					std::string tabSize = path::get_attr(path, "com.macromates.backup.tab-size");
+					if(tabSize != NULL_STR)
+						res->_indent = text::indent_t(std::max(1, atoi(tabSize.c_str())), SIZE_T_MAX, path::get_attr(path, "com.macromates.backup.soft-tabs") == "YES");
+
+					add_no_lock(res);
+					return res;
+				}
+			}
+			D(DBF_Document_Tracker, bug("nothing found\n"););
+			return document_ptr();
+		}
+
+		inode_t update_document (oak::uuid_t const& uuid)
+		{
+			std::lock_guard<std::mutex> lock(_lock);
+			D(DBF_Document_Tracker, bug("%s\n", to_s(uuid).c_str()););
+
+			auto it = _documents_by_uuid.find(uuid);
+			if(it != _documents_by_uuid.end())
+			{
+				if(document_ptr doc = it->second->document.lock())
+				{
+					inode_t newInode(doc->path());
+					if(doc->path() != it->second->path || newInode != it->second->inode)
+					{
+						D(DBF_Document_Tracker, bug("path ‘%s’ → ‘%s’\n", it->second->path.c_str(), doc->path().c_str()););
+						D(DBF_Document_Tracker, bug("inode (%llu, %d) → (%llu, %d)\n", it->second->inode.inode, it->second->inode.device, newInode.inode, newInode.device););
+						remove_no_lock(uuid);
+						doc->_inode = newInode;
+						add_no_lock(doc);
+					}
+					return newInode;
+				}
+				D(DBF_Document_Tracker, bug("weak reference expired\n"););
+				ASSERT(false);
+			}
+			D(DBF_Document_Tracker, bug("uuid not found\n"););
+			ASSERT(it != _documents_by_uuid.end());
+			return inode_t();
+		}
+
+		void remove (oak::uuid_t const& uuid)
+		{
+			std::lock_guard<std::mutex> lock(_lock);
+			D(DBF_Document_Tracker, bug("%s\n", to_s(uuid).c_str()););
+
+			remove_no_lock(uuid);
+		}
+
+	private:
+		struct record_t
+		{
+			oak::uuid_t uuid;
+			std::string path;
+			inode_t inode;
+			document_weak_ptr document;
+		};
+
+		typedef std::shared_ptr<record_t> record_ptr;
+
+		std::mutex                        _lock;
+		std::map<oak::uuid_t, record_ptr> _documents_by_uuid;
+		std::map<std::string, record_ptr> _documents_by_path;
+		std::map<inode_t, record_ptr>     _documents_by_inode;
+
+		void add_no_lock (document_ptr doc)
+		{
+			record_ptr r(new record_t);
+			r->uuid     = doc->identifier();
+			r->path     = doc->path();
+			r->inode    = doc->_inode;
+			r->document = doc;
+
+			ASSERT(_documents_by_uuid.find(r->uuid) == _documents_by_uuid.end());
+			_documents_by_uuid.emplace(r->uuid, r);
+
+			if(r->path != NULL_STR)
+			{
+				ASSERT(_documents_by_path.find(r->path) == _documents_by_path.end());
+				_documents_by_path.emplace(r->path, r);
+			}
+
+			if(r->inode)
+			{
+				ASSERT(_documents_by_inode.find(r->inode) == _documents_by_inode.end());
+				_documents_by_inode.emplace(r->inode, r);
+			}
+		}
+
+		void remove_no_lock (oak::uuid_t const& uuid)
+		{
+			auto it = _documents_by_uuid.find(uuid);
+			if(it != _documents_by_uuid.end())
+			{
+				if(it->second->inode)
+					_documents_by_inode.erase(it->second->inode);
+				if(it->second->path != NULL_STR)
+					_documents_by_path.erase(it->second->path);
+				_documents_by_uuid.erase(it);
+			}
+			ASSERT(it != _documents_by_uuid.end());
 		}
 
 	} documents;
 
-	document_ptr create (std::string const& rawPath)                             { std::string const path = path::resolve(rawPath); return path::is_text_clipping(path) ? from_content(path::resource(path, typeUTF8Text, 256)) : documents.create(path, path::identifier_t(path)); }
-	document_ptr create (std::string const& path, path::identifier_t const& key) { return documents.create(path, key); }
-	document_ptr find (oak::uuid_t const& uuid, bool searchBackups)              { return documents.find(uuid, searchBackups); }
+	document_ptr create (std::string const& rawPath)                    { std::string const path = path::resolve(rawPath); return path::is_text_clipping(path) ? from_content(path::resource(path, typeUTF8Text, 256)) : documents.create(path, inode_t(path)); }
+	document_ptr create (std::string const& path, inode_t const& inode) { return documents.create(path, inode); }
+	document_ptr find (oak::uuid_t const& uuid, bool searchBackups)     { return documents.find(uuid, searchBackups); }
 
-	document_ptr from_content (std::string const& content, std::string const& fileType)
+	document_ptr from_content (std::string const& content, std::string fileType)
 	{
 		D(DBF_Document, bug("%s\n", fileType.c_str()););
+		if(fileType == NULL_STR)
+			fileType = file::type(NULL_STR, io::bytes_ptr(new io::bytes_t(content.data(), content.size(), false)));
+
 		document_ptr doc = create();
 		if(fileType != NULL_STR)
 			doc->set_file_type(fileType);
+
+		auto const settings = settings_for_path(NULL_STR, doc->file_type());
+		doc->set_indent(text::indent_t(std::max(1, settings.get(kSettingsTabSizeKey, 4)), SIZE_T_MAX, settings.get(kSettingsSoftTabsKey, false)));
+
 		doc->set_content(content);
 		return doc;
 	}
@@ -467,7 +537,7 @@ namespace document
 		D(DBF_Document, bug("%s\n", display_name().c_str()););
 		if(_path != NULL_STR && _buffer)
 			document::marks.set(_path, marks());
-		documents.remove(_identifier, _key);
+		documents.remove(_identifier);
 	}
 
 	std::string document_t::display_name () const
@@ -512,6 +582,23 @@ namespace document
 		return map;
 	}
 
+	void document_t::set_indent (text::indent_t const& indent)
+	{
+		if(_indent == indent)
+			return;
+
+		_indent = indent;
+		if(_buffer)
+			_buffer->indent() = indent;
+
+		const_cast<document_t*>(this)->broadcast(callback_t::did_change_indent_settings);
+	}
+
+	text::indent_t const& document_t::indent () const
+	{
+		return _indent;
+	}
+
 	void document_t::setup_buffer ()
 	{
 		D(DBF_Document, bug("%s, %s\n", display_name().c_str(), _file_type.c_str()););
@@ -525,11 +612,8 @@ namespace document
 		}
 
 		settings_t const settings = settings_for_path(virtual_path(), file_type(), path::parent(_path), document_variables());
-		_buffer->indent() = text::indent_t(std::max(1, settings.get(kSettingsTabSizeKey, 4)), SIZE_T_MAX, settings.get(kSettingsSoftTabsKey, false));
 		_buffer->set_spelling_language(settings.get(kSettingsSpellingLanguageKey, "en"));
 		_buffer->set_live_spelling(settings.get(kSettingsSpellCheckingKey, false));
-
-		const_cast<document_t*>(this)->broadcast(callback_t::did_change_indent_settings);
 
 		D(DBF_Document, bug("done\n"););
 	}
@@ -558,10 +642,13 @@ namespace document
 
 		if(_selection == NULL_STR)
 		{
-			std::map<std::string, std::string>::const_iterator sel  = attributes.find("com.macromates.selectionRange");
-			std::map<std::string, std::string>::const_iterator rect = attributes.find("com.macromates.visibleRect");
-			_selection    = sel != attributes.end()  ? sel->second  : NULL_STR;
-			_visible_rect = rect != attributes.end() ? rect->second : NULL_STR;
+			std::map<std::string, std::string>::const_iterator sel = attributes.find("com.macromates.selectionRange");
+			std::map<std::string, std::string>::const_iterator idx = attributes.find("com.macromates.visibleIndex");
+			_selection = sel != attributes.end() ? sel->second : NULL_STR;
+
+			size_t index = SIZE_T_MAX, carry = 0;
+			sscanf(idx->second.c_str(), "%zu:%zu", &index, &carry);
+			_visible_index = ng::index_t(index, carry);
 		}
 
 		_is_on_disk = _path != NULL_STR && access(_path.c_str(), F_OK) == 0;
@@ -569,6 +656,7 @@ namespace document
 			_file_watcher.reset(new watch_t(_path, shared_from_this()));
 
 		_buffer.reset(new ng::buffer_t);
+		_buffer->indent() = _indent;
 		setup_buffer();
 		if(content)
 		{
@@ -591,7 +679,7 @@ namespace document
 	{
 		if(success)
 		{
-			_key = documents.update_path(shared_from_this(), _key, path::identifier_t(_path));
+			_inode = documents.update_document(identifier());
 
 			if(!_is_on_disk)
 			{
@@ -635,7 +723,9 @@ namespace document
 		{
 			save_callback_wrapper_t (document::document_ptr doc, document::save_callback_ptr callback) : _document(doc), _callback(callback)
 			{
-				_document->open();
+				if(_document->is_open())
+						_document->open();
+				else	_should_close = false;
 			}
 
 			void select_path (std::string const& path, io::bytes_ptr content, file::save_context_ptr context)                                     { _callback->select_path(path, content, context); }
@@ -645,14 +735,17 @@ namespace document
 
 			void did_save (std::string const& path, io::bytes_ptr content, encoding::type const& encoding, bool success, std::string const& message, oak::uuid_t const& filter)
 			{
-				_document->post_save(path, content, encoding, success);
+				if(_should_close)
+					_document->post_save(path, content, encoding, success);
 				_callback->did_save_document(_document, path, success, message, filter);
-				_document->close();
+				if(_should_close)
+					_document->close();
 			}
 
 		private:
 			document::document_ptr _document;
 			document::save_callback_ptr _callback;
+			bool _should_close = true;
 		};
 
 		D(DBF_Document, bug("save ‘%s’\n", _path.c_str()););
@@ -669,7 +762,7 @@ namespace document
 		if(volume::settings(_path).extended_attributes())
 		{
 			attributes["com.macromates.selectionRange"] = _selection;
-			attributes["com.macromates.visibleRect"]    = _visible_rect;
+			attributes["com.macromates.visibleIndex"]   = _visible_index ? to_s(_visible_index) : NULL_STR;
 			attributes["com.macromates.bookmarks"]      = marks_as_string();
 			attributes["com.macromates.folded"]         = _folded;
 		}
@@ -720,19 +813,21 @@ namespace document
 			path::set_attr(dst, "com.macromates.backup.path",           _path);
 			path::set_attr(dst, "com.macromates.backup.identifier",     to_s(_identifier));
 			path::set_attr(dst, "com.macromates.selectionRange",        _selection);
-			path::set_attr(dst, "com.macromates.visibleRect",           _visible_rect);
+			path::set_attr(dst, "com.macromates.visibleIndex",          _visible_index ? to_s(_visible_index) : NULL_STR);
 			path::set_attr(dst, "com.macromates.backup.file-type",      _file_type);
 			path::set_attr(dst, "com.macromates.backup.encoding",       _disk_encoding);
 			path::set_attr(dst, "com.macromates.backup.bom",            _disk_bom ? "YES" : "NO");
 			path::set_attr(dst, "com.macromates.backup.newlines",       _disk_newlines);
 			path::set_attr(dst, "com.macromates.backup.untitled-count", std::to_string(_untitled_count));
 			path::set_attr(dst, "com.macromates.backup.custom-name",    _custom_name);
+			path::set_attr(dst, "com.macromates.backup.tab-size",       std::to_string(_indent.tab_size()));
+			path::set_attr(dst, "com.macromates.backup.soft-tabs",      _indent.soft_tabs() ? "YES" : "NO");
 			path::set_attr(dst, "com.macromates.bookmarks",             marks_as_string());
 			path::set_attr(dst, "com.macromates.folded",                NULL_STR);
 			if(is_modified())
 				path::set_attr(dst, "com.macromates.backup.modified", "YES");
 
-			// TODO tab size, spell checking, soft wrap, etc. should go into session!?!
+			// TODO spell checking, soft wrap, etc. should go into session!?!
 
 			_backup_revision = revision();
 
@@ -775,8 +870,8 @@ namespace document
 		if(_path == normalizedPath)
 			return;
 
-		_path = normalizedPath;
-		_key  = documents.update_path(shared_from_this(), _key, path::identifier_t(normalizedPath));
+		_path  = normalizedPath;
+		_inode = documents.update_document(identifier());
 		if(is_open())
 		{
 			_is_on_disk = access(_path.c_str(), F_OK) == 0;
@@ -851,7 +946,8 @@ namespace document
 		{
 			D(DBF_Document, bug("save attributes for ‘%s’\n", _path.c_str()););
 			path::set_attr(_path, "com.macromates.selectionRange", _selection);
-			path::set_attr(_path, "com.macromates.visibleRect",    _visible_rect);
+			path::set_attr(_path, "com.macromates.visibleRect",    NULL_STR); // clear legacy attribute
+			path::set_attr(_path, "com.macromates.visibleIndex",   _visible_index ? to_s(_visible_index) : NULL_STR);
 			path::set_attr(_path, "com.macromates.bookmarks",      marks_as_string());
 		}
 
@@ -970,6 +1066,8 @@ namespace document
 			if(!_is_on_disk && (_is_on_disk = access(_path.c_str(), F_OK) == 0))
 				broadcast(callback_t::did_change_on_disk_status);
 
+			crash_reporter_info_t crashInfo("reload file with changes");
+
 			open_callback_t* raw = new open_callback_t(shared_from_this(), async);
 			file::open_callback_ptr cb((file::open_callback_t*)raw);
 			file::open(_path, _authorization, cb);
@@ -986,6 +1084,9 @@ namespace document
 			if(_buffer)
 				setup_buffer();
 			broadcast(callback_t::did_change_file_type);
+
+			auto const settings = settings_for_path(virtual_path(), file_type(), path::parent(_path), document_variables());
+			set_indent(text::indent_t(std::max(1, settings.get(kSettingsTabSizeKey, 4)), SIZE_T_MAX, settings.get(kSettingsSoftTabsKey, false)));
 		}
 	}
 
@@ -1012,9 +1113,82 @@ namespace document
 		struct file_reader_t : reader::open_t
 		{
 			WATCH_LEAKS(file_reader_t);
-			file_reader_t (document_const_ptr const& document) : reader::open_t(document->path()), document(document) { }
+			file_reader_t (document_const_ptr const& document) : reader::open_t(document->path()), document(document)
+			{
+				// Reading the first 1024 characters to try to determine the file encoding without using
+				// the settings_for_path function.
+				std::string header(1024, ' ');
+				ssize_t len = read(fd, &header.front(), header.size());
+				header.resize(len != -1 ? len : 0);
+
+				// 1. Try to find a bom
+				// 2. If the characters are UTF8 valid we suppose the rest is UTF8
+				// 3. At last, we use settings_for_path to use the specified encoding into the .tm_properties
+				size_t bomSize = 0;
+				std::string charset = encoding::charset_from_bom(&header.front(), &header.front() + header.size(), &bomSize);
+				lseek(fd, bomSize, SEEK_SET);
+				if(charset == kCharsetNoEncoding)
+				{
+					if(utf8::is_valid(&header.front(), &header.front() + header.size()))
+							charset = kCharsetUTF8;
+					else	charset = settings_for_path(document->path(), "attr.file.unknown-encoding " + file::path_attributes(document->path())).get(kSettingsEncodingKey, kCharsetUnknown);
+				}
+				else
+				{
+					_encoding.set_byte_order_mark(true);
+				}
+
+				if(charset != kCharsetUTF8 && charset != kCharsetUnknown && charset != kCharsetNoEncoding)
+				{
+					_encoding.set_charset(charset);
+					converter = iconv_open(kCharsetUTF8.c_str(), charset.c_str());
+				}
+			}
+			
+			~file_reader_t()
+			{
+				if(converter != (iconv_t)(-1))
+					iconv_close(converter);
+			}
+
+			io::bytes_ptr next ()
+			{
+				io::bytes_ptr content = reader::open_t::next();
+				if(converter == (iconv_t)(-1))
+					return content;
+				if(content)
+					read_buffer.append(content->get(), content->size());
+				if(read_buffer.size() == 0)
+					return io::bytes_ptr();
+
+				char* src           = &read_buffer.front();
+				size_t srcBytesLeft = read_buffer.size();
+
+				std::string dest_buffer(srcBytesLeft * 1.5, ' ');
+				char* dst           = &dest_buffer.front();
+				size_t dstBytesLeft = dest_buffer.size();
+
+				size_t rc = iconv(converter, &src, &srcBytesLeft, &dst, &dstBytesLeft);
+				if(rc == (size_t)(-1) && errno != E2BIG && (errno != EINVAL || dstBytesLeft == dest_buffer.size()))
+					return io::bytes_ptr();
+
+				// Erase only the characters that iconv has decoded if the content has ended in the middle
+				// of a multi-byte character. On the next call of next() the remaining characters will be decoded.
+				read_buffer.erase(0, read_buffer.size() - srcBytesLeft);
+				dest_buffer.resize(dest_buffer.size() - dstBytesLeft);
+				return io::bytes_ptr(new io::bytes_t(dest_buffer));
+			}
+
+			encoding::type const& encoding () const
+			{
+				return _encoding;
+			}
+
 		private:
 			document_const_ptr document;
+			std::string read_buffer;
+			encoding::type _encoding;
+			iconv_t converter = (iconv_t)-1;
 		};
 
 		struct buffer_reader_t : document::document_t::reader_t
@@ -1045,7 +1219,7 @@ namespace document
 	// = Replace =
 	// ===========
 
-	void document_t::replace (std::multimap<text::range_t, std::string> const& replacements)
+	void document_t::replace (std::multimap<std::pair<size_t, size_t>, std::string> const& replacements)
 	{
 		ASSERT(!is_open());
 
@@ -1053,18 +1227,22 @@ namespace document
 			return;
 
 		ASSERT(_path != NULL_STR);
-		ASSERT(!_buffer)
+		ASSERT(!_buffer);
 
 		ng::buffer_t buf;
-		buf.insert(0, path::content(_path));
+
+		file_reader_t reader(shared_from_this());
+		while(io::bytes_ptr bytes = reader.next())
+			buf.insert(buf.size(), std::string(bytes->begin(), bytes->end()));
 
 		riterate(pair, replacements)
 		{
-			D(DBF_Document_Replace, bug("replace %s with ‘%s’\n", std::string(pair->first).c_str(), pair->second.c_str()););
-			buf.replace(buf.convert(pair->first.min()), buf.convert(pair->first.max()), pair->second);
+			D(DBF_Document_Replace, bug("replace range %zu-%zu with ‘%s’\n", pair->first.first, pair->first.second, pair->second.c_str()););
+			buf.replace(pair->first.first, pair->first.second, pair->second);
 		}
 
 		_content.reset(new io::bytes_t(buf.substr(0, buf.size())));
+		set_disk_encoding(reader.encoding());
 	}
 
 	static ng::index_t cap (ng::buffer_t const& buf, text::pos_t const& pos)
@@ -1278,8 +1456,11 @@ namespace document
 			dirs.pop_front();
 
 			struct stat buf;
-			if(lstat(initialPath.c_str(), &buf) != 0) // get st_dev so we don’t need to stat each path entry (unless it is a symbolic link)
+			if(lstat(initialPath.c_str(), &buf) == -1) // get st_dev so we don’t need to stat each path entry (unless it is a symbolic link)
+			{
+				perror(text::format("lstat(\"%s\")", initialPath.c_str()).c_str());
 				continue;
+			}
 
 			ASSERT(S_ISDIR(buf.st_mode) || S_ISLNK(buf.st_mode));
 
@@ -1288,11 +1469,11 @@ namespace document
 			pthread_mutex_unlock(&mutex);
 
 			std::vector<std::string> newDirs;
-			std::multimap<std::string, path::identifier_t, text::less_t> files;
+			std::multimap<std::string, inode_t, text::less_t> files;
 			citerate(it, path::entries(dir))
 			{
 				if(should_stop_flag)
-					break;
+					return;
 
 				std::string const& path = path::join(dir, (*it)->d_name);
 				if((*it)->d_type == DT_DIR)
@@ -1310,7 +1491,7 @@ namespace document
 						continue;
 
 					if(seen_paths.insert(std::make_pair(buf.st_dev, (*it)->d_ino)).second)
-							files.insert(std::make_pair(path, path::identifier_t(true, buf.st_dev, (*it)->d_ino, path)));
+							files.emplace(path, inode_t(buf.st_dev, (*it)->d_ino, path));
 					else	D(DBF_Document_Scanner, bug("skip known path: ‘%s’\n", path.c_str()););
 				}
 				else if((*it)->d_type == DT_LNK)
@@ -1327,7 +1508,7 @@ namespace document
 				iterate(link, links)
 				{
 					std::string path = path::resolve(*link);
-					if(lstat(path.c_str(), &buf) == 0)
+					if(lstat(path.c_str(), &buf) != -1)
 					{
 						if(S_ISDIR(buf.st_mode) && follow_links && seen_paths.insert(std::make_pair(buf.st_dev, buf.st_ino)).second)
 						{
@@ -1343,9 +1524,13 @@ namespace document
 								continue;
 
 							if(seen_paths.insert(std::make_pair(buf.st_dev, buf.st_ino)).second)
-									files.insert(std::make_pair(path, path::identifier_t(true, buf.st_dev, buf.st_ino, path)));
+									files.emplace(path, inode_t(buf.st_dev, buf.st_ino, path));
 							else	D(DBF_Document_Scanner, bug("skip known path: ‘%s’\n", path.c_str()););
 						}
+					}
+					else
+					{
+						perror(text::format("lstat(“%s” → “%s”))", link->c_str(), path.c_str()).c_str());
 					}
 				}
 				links.clear();

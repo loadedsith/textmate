@@ -2,6 +2,7 @@
 #include <buffer/buffer.h>
 #include <bundles/bundles.h>
 #include <regexp/find.h>
+#include <regexp/regexp.h>
 #include <text/classification.h>
 #include <text/utf8.h>
 #include <text/ctype.h>
@@ -178,101 +179,196 @@ namespace ng
 	// = Typing Pair Support =
 	// =======================
 
-	static std::vector< std::pair<std::string, std::string> > character_pairs (scope::context_t const& scope, std::string const& key)
+	namespace
 	{
-		std::vector< std::pair<std::string, std::string> > res;
+		struct pattern_t
+		{
+			pattern_t () { }
 
+			pattern_t (std::string const& plain) : plain(plain)
+			{
+				if(plain.size() > 2 && plain[0] == '/' && plain[plain.size()-1] == '/')
+				{
+					left_anchored_regexp = "\\G" + plain.substr(1, plain.size()-2);
+					right_anchored_regexp = plain.substr(1, plain.size()-2) + "\\G";
+					is_regexp = true;
+				}
+			}
+
+			std::string plain;
+			regexp::pattern_t left_anchored_regexp;
+			regexp::pattern_t right_anchored_regexp;
+			bool is_regexp = false;
+		};
+
+		struct match_t
+		{
+			match_t (std::string const& match = NULL_STR, pattern_t const& counterpart_ptrn = pattern_t(), bool matched_opener = false) : match(match), counterpart_ptrn(counterpart_ptrn), matched_opener(matched_opener) { }
+			operator bool () const { return match != NULL_STR; }
+			std::string match;
+			pattern_t counterpart_ptrn;
+			bool matched_opener;
+		};
+
+		struct enclosed_range_t
+		{
+			enclosed_range_t () { }
+			enclosed_range_t (std::pair<pattern_t, pattern_t> const& pair) : opener_ptrn(pair.first), closer_ptrn(pair.second) { }
+
+			operator bool () const { return open_index != SIZE_T_MAX && close_index != 0; }
+
+			pattern_t opener_ptrn, closer_ptrn;
+			std::string opener_match, closer_match;
+			size_t open_index = SIZE_T_MAX, close_index = 0;
+			ssize_t open_count = 0, close_count = 0;
+		};
+	}
+
+	static std::vector<std::pair<pattern_t, pattern_t>> character_pairs (scope::context_t const& scope, std::string const& key)
+	{
+		std::vector<std::pair<pattern_t, pattern_t>> res;
 		plist::any_t value = bundles::value_for_setting(key, scope);
 		if(plist::array_t const* array = boost::get<plist::array_t>(&value))
 		{
-			iterate(pair, *array)
+			for(auto const& pair : *array)
 			{
-				if(plist::array_t const* value = boost::get<plist::array_t>(&*pair))
+				if(plist::array_t const* value = boost::get<plist::array_t>(&pair))
 				{
 					std::string const* a1 = value->size() == 2 ? boost::get<std::string>(&(*value)[0]) : NULL;
 					std::string const* a2 = value->size() == 2 ? boost::get<std::string>(&(*value)[1]) : NULL;
 					if(a1 && a2 && *a1 != *a2)
-						res.push_back(std::make_pair(*a1, *a2));
+						res.emplace_back(*a1, *a2);
 				}
 			}
 		}
 		else
 		{
-			res.push_back(std::make_pair("(", ")"));
-			res.push_back(std::make_pair("{", "}"));
-			res.push_back(std::make_pair("[", "]"));
+			res.emplace_back(pattern_t("("), pattern_t(")"));
+			res.emplace_back(pattern_t("{"), pattern_t("}"));
+			res.emplace_back(pattern_t("["), pattern_t("]"));
 		}
-
 		return res;
 	}
 
-	namespace
+	static bool does_match (regexp::pattern_t const& ptrn, buffer_t const& buffer, size_t from, size_t to, std::string* didMatch)
 	{
-		struct character_pair_t
+		if(ptrn)
 		{
-			character_pair_t () { }
-			character_pair_t (std::string const& first, std::string const& second, bool matchedFirst) : first(first), second(second), matched_first(matchedFirst), initialized(true) { }
-			explicit operator bool () const { return initialized; }
-
-			std::string first, second;
-			bool matched_first, initialized = false;
-		};
-	}
-
-	static bool does_match (buffer_t const& buffer, size_t index, std::string const& ch)
-	{
-		return index + ch.size() <= buffer.size() && ch == buffer.substr(index, index + ch.size());
-	}
-
-	static character_pair_t first_match (buffer_t const& buffer, size_t index, std::vector< std::pair<std::string, std::string> > const& pairs)
-	{
-		citerate(pair, pairs)
-		{
-			if(does_match(buffer, index, pair->first))
-				return character_pair_t(pair->first, pair->second, true);
-			else if(does_match(buffer, index, pair->second))
-				return character_pair_t(pair->first, pair->second, false);
+			size_t bol = std::min(from, to), eol = std::max(from, to);
+			std::string line = buffer.substr(bol, eol);
+			if(auto m = regexp::search(ptrn, line.data(), line.data() + line.size(), line.data() + (from - bol), line.data() + (to - bol), ONIG_OPTION_FIND_NOT_EMPTY))
+			{
+				*didMatch = line.substr(m.begin(), m.end() - m.begin());
+				return true;
+			}
 		}
-		return character_pair_t();
+		return false;
+	}
+
+	static bool does_match_left (pattern_t const& ptrn, buffer_t const& buffer, size_t index, std::string* didMatch)
+	{
+		if(!ptrn.is_regexp && ptrn.plain.size() <= index && ptrn.plain == buffer.substr(index - ptrn.plain.size(), index))
+		{
+			*didMatch = ptrn.plain;
+			return true;
+		}
+		return ptrn.is_regexp && does_match(ptrn.right_anchored_regexp, buffer, index, buffer.begin(buffer.convert(index).line), didMatch);
+	}
+
+	static bool does_match_right (pattern_t const& ptrn, buffer_t const& buffer, size_t index, std::string* didMatch)
+	{
+		if(!ptrn.is_regexp && index + ptrn.plain.size() <= buffer.size() && ptrn.plain == buffer.substr(index, index + ptrn.plain.size()))
+		{
+			*didMatch = ptrn.plain;
+			return true;
+		}
+		return ptrn.is_regexp && does_match(ptrn.left_anchored_regexp, buffer, index, buffer.eol(buffer.convert(index).line), didMatch);
+	}
+
+	static enclosed_range_t find_enclosed_range (buffer_t const& buffer, size_t index, std::vector<std::pair<pattern_t, pattern_t>> const& pairs)
+	{
+		std::vector<enclosed_range_t> records(pairs.begin(), pairs.end());
+
+		size_t left = index, right = index;
+		while(0 < left || right < buffer.size())
+		{
+			for(auto& r : records)
+			{
+				std::string match;
+				if(0 < left && r.open_index == SIZE_T_MAX)
+				{
+					if(does_match_left(r.opener_ptrn, buffer, left, &match) && ++r.open_count == 1)
+					{
+						r.open_index = left;
+						r.opener_match = match;
+					}
+					else if(does_match_left(r.closer_ptrn, buffer, left, &match))
+					{
+						--r.open_count;
+					}
+				}
+
+				if(right < buffer.size() && r.close_index == 0)
+				{
+					if(does_match_right(r.closer_ptrn, buffer, right, &match) && ++r.close_count == 1)
+					{
+						r.close_index = right;
+						r.closer_match = match;
+					}
+					else if(does_match_right(r.opener_ptrn, buffer, right, &match))
+					{
+						--r.close_count;
+					}
+				}
+
+				if(r)
+					return r;
+			}
+
+			if(0 < left)
+				left -= buffer[left-1].size();
+			if(right < buffer.size())
+				right += buffer[right].size();
+		}
+		return enclosed_range_t();
+	}
+
+	static match_t first_match (buffer_t const& buffer, size_t index, std::vector<std::pair<pattern_t, pattern_t>> const& pairs, bool(*matcher)(pattern_t const&, buffer_t const&, size_t, std::string*))
+	{
+		std::string didMatch;
+		for(auto const& pair : pairs)
+		{
+			if(matcher(pair.first, buffer, index, &didMatch))
+				return match_t(didMatch, pair.second, true);
+			else if(matcher(pair.second, buffer, index, &didMatch))
+				return match_t(didMatch, pair.first, false);
+		}
+		return match_t();
 	}
 
 	static size_t begin_of_typing_pair (buffer_t const& buffer, size_t caret, bool moveToBefore)
 	{
 		size_t orgCaret = caret;
 		auto pairs = character_pairs(buffer.scope(caret), "highlightPairs");
-		bool skip = false;
-		while(0 < caret)
+
+		pattern_t openerPtrn;
+		if(!moveToBefore)
 		{
-			caret -= buffer[caret-1].size();
-			auto pair = first_match(buffer, caret, pairs);
-			if(!pair)
-				continue;
-
-			if(pair.matched_first)
+			if(auto m = first_match(buffer, caret, pairs, &does_match_left))
 			{
-				if(caret + pair.first.size() != orgCaret || moveToBefore)
-					return caret + (skip || moveToBefore || orgCaret < caret + pair.first.size() ? 0 : pair.first.size());
-				continue;
-			}
-
-			if(!moveToBefore && orgCaret <= caret + pair.second.size())
-			{
-				skip = true;
-				continue;
-			}
-
-			std::string const& openCh  = pair.first;
-			std::string const& closeCh = pair.second;
-
-			for(size_t balance = 1; balance != 0 && 0 < caret; )
-			{
-				caret -= buffer[caret-1].size();
-				if(does_match(buffer, caret, openCh))
-					--balance;
-				else if(does_match(buffer, caret, closeCh))
-					++balance;
+				openerPtrn = m.matched_opener ? pattern_t() : m.counterpart_ptrn;
+				caret -= m.match.size();
 			}
 		}
+
+		if(auto range = find_enclosed_range(buffer, caret, pairs))
+		{
+			caret = range.open_index;
+			if(moveToBefore || does_match_left(openerPtrn, buffer, caret, &range.opener_match))
+				caret -= range.opener_match.size();
+			return caret;
+		}
+
 		return orgCaret;
 	}
 
@@ -280,49 +376,23 @@ namespace ng
 	{
 		size_t orgCaret = caret;
 		auto pairs = character_pairs(buffer.scope(caret), "highlightPairs");
-		bool skipEnd = false;
+
+		pattern_t closerPtrn;
 		if(!moveToAfter)
 		{
-			if(auto pair = first_match(buffer, caret, pairs))
+			if(auto m = first_match(buffer, caret, pairs, &does_match_right))
 			{
-				skipEnd = pair.matched_first;
-				caret += pair.matched_first ? pair.first.size() : pair.second.size();
+				closerPtrn = m.matched_opener ? m.counterpart_ptrn : pattern_t();
+				caret += m.match.size();
 			}
 		}
 
-		while(caret < buffer.size())
+		if(auto range = find_enclosed_range(buffer, caret, pairs))
 		{
-			auto pair = first_match(buffer, caret, pairs);
-			if(!pair)
-			{
-				caret += buffer[caret].size();
-				continue;
-			}
-
-			if(!pair.matched_first)
-				return caret + (skipEnd || moveToAfter ? pair.second.size() : 0);
-
-			std::string const& openCh  = pair.first;
-			std::string const& closeCh = pair.second;
-
-			caret += openCh.size();
-			for(size_t balance = 1; balance != 0 && caret < buffer.size(); )
-			{
-				if(does_match(buffer, caret, closeCh))
-				{
-					--balance;
-					caret += closeCh.size();
-				}
-				else if(does_match(buffer, caret, openCh))
-				{
-					++balance;
-					caret += openCh.size();
-				}
-				else
-				{
-					caret += buffer[caret].size();
-				}
-			}
+			caret = range.close_index;
+			if(moveToAfter || does_match_right(closerPtrn, buffer, caret, &range.closer_match))
+				caret += range.closer_match.size();
+			return caret;
 		}
 
 		return orgCaret;
@@ -1090,24 +1160,25 @@ namespace ng
 			size_t curCaret  = newRange->last.index;
 			auto pairs       = character_pairs(buffer.scope(std::min(prevCaret, curCaret)), "highlightPairs");
 
+			std::string didMatch;
 			if(prevCaret < curCaret && prevCaret + buffer[prevCaret].size() == curCaret) // moved right, check end character
 			{
-				auto pair = first_match(buffer, prevCaret, pairs);
-				if(pair && !pair.matched_first)
+				auto m = first_match(buffer, curCaret, pairs, &does_match_left);
+				if(m && !m.matched_opener)
 				{
-					size_t from = begin_of_typing_pair(buffer, prevCaret, true);
-					if(from != prevCaret && does_match(buffer, from, pair.first))
-						res.push_back(range_t(from, from + pair.first.size()));
+					size_t from = begin_of_typing_pair(buffer, curCaret - m.match.size(), true);
+					if(from != prevCaret && does_match_right(m.counterpart_ptrn, buffer, from, &didMatch))
+						res.push_back(range_t(from, from + didMatch.size()));
 				}
 			}
 			else if(curCaret < prevCaret && curCaret + buffer[curCaret].size() == prevCaret) // moved left, check begin character
 			{
-				auto pair = first_match(buffer, curCaret, pairs);
-				if(pair && pair.matched_first)
+				auto m = first_match(buffer, curCaret, pairs, &does_match_right);
+				if(m && m.matched_opener)
 				{
-					size_t to = end_of_typing_pair(buffer, prevCaret, true);
-					if(to != prevCaret && to >= pair.second.size() && does_match(buffer, to - pair.second.size(), pair.second))
-						res.push_back(range_t(to - pair.second.size(), to));
+					size_t to = end_of_typing_pair(buffer, curCaret + m.match.size(), true);
+					if(to != prevCaret && does_match_left(m.counterpart_ptrn, buffer, to, &didMatch))
+						res.push_back(range_t(to - didMatch.size(), to));
 				}
 			}
 		}
@@ -1174,8 +1245,11 @@ namespace ng
 		return res;
 	}
 
-	static std::map< range_t, std::map<std::string, std::string> > regexp_find (buffer_t const& buffer, std::string const& searchFor, find::options_t options, size_t first, size_t last)
+	static std::map< range_t, std::map<std::string, std::string> > regexp_find (buffer_t const& buffer, std::string const& searchFor, find::options_t options, ng::range_t const& range)
 	{
+		size_t first = (options & find::backwards) ? range.min().index : range.max().index;
+		size_t last  = (options & find::backwards) ?                 0 :     buffer.size();
+
 		std::map< range_t, std::map<std::string, std::string> > res;
 
 		OnigOptionType ptrnOptions = ONIG_OPTION_NONE;
@@ -1183,24 +1257,41 @@ namespace ng
 			ptrnOptions |= ONIG_OPTION_IGNORECASE;
 
 		std::string str = buffer.substr(0, buffer.size());
-		if(regexp::match_t const& m = search(regexp::pattern_t(searchFor, ptrnOptions), str.data(), str.data() + str.size(), str.data() + first, str.data() + last))
-			res.insert(std::make_pair(ng::range_t(m.begin(), m.end()), m.captures()));
+		if(regexp::match_t m = search(regexp::pattern_t(searchFor, ptrnOptions), str.data(), str.data() + str.size(), str.data() + first, str.data() + last))
+		{
+			if(range.sorted() == ng::range_t(m.begin(), m.end()))
+			{
+				if(options & find::backwards)
+				{
+					if(0 < first)
+						first -= buffer[first-1].size();
+				}
+				else
+				{
+					if(first < str.size())
+						first += buffer[first].size();
+				}
+				m = search(regexp::pattern_t(searchFor, ptrnOptions), str.data(), str.data() + str.size(), str.data() + first, str.data() + last);
+			}
+
+			if(m && range.sorted() != ng::range_t(m.begin(), m.end()))
+				res.insert(std::make_pair(ng::range_t(m.begin(), m.end()), m.captures()));
+		}
 
 		return res;
 	}
 
-	std::map< range_t, std::map<std::string, std::string> > find (buffer_t const& buffer, ranges_t const& selection, std::string const& searchFor, find::options_t options, ranges_t const& searchRanges)
+	std::map< range_t, std::map<std::string, std::string> > find (buffer_t const& buffer, ranges_t const& selection, std::string const& searchFor, find::options_t options, ranges_t const& searchRanges, bool* didWrap)
 	{
+		auto setDidWrap = [&didWrap](bool flag){ if(didWrap != nullptr) *didWrap = flag; };
+		setDidWrap(false);
+
 		std::map< range_t, std::map<std::string, std::string> > res;
 		if(searchFor == NULL_STR || searchFor == "")
 			return res;
 
 		if(selection.size() == 1 && (options & (find::regular_expression|find::wrap_around|find::all_matches|find::extend_selection)) == find::regular_expression)
-		{
-			size_t first = (options & find::backwards) ? selection.last().min().index : selection.last().max().index;
-			size_t last  = (options & find::backwards) ?                            0 :                buffer.size();
-			return regexp_find(buffer, searchFor, options, first, last);
-		}
+			return regexp_find(buffer, searchFor, options, selection.last());
 
 		auto tmp = find_all(buffer, searchFor, options, searchRanges);
 		if(options & find::all_matches)
@@ -1231,32 +1322,74 @@ namespace ng
 			return res;
 		}
 
-		citerate(range, dissect_columnar(buffer, selection))
+		if(tmp.empty())
+			return tmp;
+
+		for(auto const& range : dissect_columnar(buffer, selection))
 		{
 			if(options & find::backwards)
 			{
-				auto it = tmp.lower_bound(range->min());
+				auto it = std::lower_bound(tmp.begin(), tmp.end(), range, [](decltype(tmp)::value_type const& candidate, ng::range_t const& range){
+					return candidate.first.empty() ? candidate.first.max() < range.min() : candidate.first.max() <= range.min();
+				});
+
 				if(it == tmp.begin())
 				{
-					if(!(options & find::wrap_around) || tmp.empty())
-						continue;
-					it = --tmp.end();
+					if(options & find::wrap_around)
+					{
+						it = --tmp.end();
+						if(range.sorted() == it->first.sorted())
+							continue;
+						else if(!(range.min() <= it->first.min() && it->first.max() <= range.max()))
+							setDidWrap(true);
+					}
+					else
+					{
+						it = std::upper_bound(tmp.begin(), tmp.end(), range, [](ng::range_t const& range, decltype(tmp)::value_type const& candidate){
+							return range.max() < candidate.first.max();
+						});
+
+						if(it == tmp.begin())
+							continue;
+						--it;
+					}
 				}
 				else
 				{
 					--it;
 				}
 
-				if(range->sorted() != it->first.sorted())
+				if(range.sorted() != it->first.sorted())
 					res.insert(*it);
 			}
 			else
 			{
-				auto it = tmp.upper_bound(range->max());
-				if(it == tmp.end() && (options & find::wrap_around))
-					it = tmp.begin();
+				auto it = std::upper_bound(tmp.begin(), tmp.end(), range, [](ng::range_t const& range, decltype(tmp)::value_type const& candidate){
+					return candidate.first.empty() ? range.max() < candidate.first.min() : range.max() <= candidate.first.min();
+				});
 
-				if(it != tmp.end() && range->sorted() != it->first.sorted())
+				if(it == tmp.end())
+				{
+					if(options & find::wrap_around)
+					{
+						it = tmp.begin();
+						if(range.sorted() == it->first.sorted())
+							continue;
+						else if(!(range.min() <= it->first.min() && it->first.max() <= range.max()))
+							setDidWrap(true);
+					}
+					else
+					{
+						it = std::upper_bound(tmp.begin(), tmp.end(), range, [](ng::range_t const& range, decltype(tmp)::value_type const& candidate){
+							return range.min() <= candidate.first.min();
+						});
+
+						if(it == tmp.end())
+							continue;
+					}
+				}
+
+				if(range.sorted() != it->first.sorted())
 					res.insert(*it);
 			}
 		}

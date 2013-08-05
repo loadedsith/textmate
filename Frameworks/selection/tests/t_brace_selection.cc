@@ -1,68 +1,149 @@
 #include <buffer/buffer.h>
 #include <selection/selection.h>
+#include <test/bundle_index.h>
 
-class BraceSelectionTests : public CxxTest::TestSuite
+__attribute__((constructor)) static void setup_fixtures ()
 {
-public:
-	void test_brace_movement ()
-	{
-		ng::buffer_t buf;
-		buf.insert(0, "this (is (a test)).");
+	static std::string HighlightPairs =
+		"{	name     = 'Highlight Pairs';"
+		"	settings = {"
+		"		highlightPairs = ("
+		"			( '(', ')' ),"
+		"			( '{', '}' ),"
+		"			( '[', ']' ),"
+		"			( '“', '”' ),"
+		"			( '/<\\w+[^>]*>/', '/</\\w+>/' ),"
+		"		);"
+		"	};"
+		"}";
 
-		TS_ASSERT_EQUALS(to_s(buf, ng::move(buf, ng::range_t( 0), kSelectionMoveToBeginOfTypingPair)),         "1");
-		TS_ASSERT_EQUALS(to_s(buf, ng::move(buf, ng::range_t( 5), kSelectionMoveToBeginOfTypingPair)),       "1:6");
-		TS_ASSERT_EQUALS(to_s(buf, ng::move(buf, ng::range_t( 6), kSelectionMoveToBeginOfTypingPair)),       "1:7");
-		TS_ASSERT_EQUALS(to_s(buf, ng::move(buf, ng::range_t( 9), kSelectionMoveToBeginOfTypingPair)),       "1:7");
-		TS_ASSERT_EQUALS(to_s(buf, ng::move(buf, ng::range_t(10), kSelectionMoveToBeginOfTypingPair)),       "1:7");
-		TS_ASSERT_EQUALS(to_s(buf, ng::move(buf, ng::range_t(16), kSelectionMoveToBeginOfTypingPair)),      "1:11");
-		TS_ASSERT_EQUALS(to_s(buf, ng::move(buf, ng::range_t(17), kSelectionMoveToBeginOfTypingPair)),      "1:10");
-		TS_ASSERT_EQUALS(to_s(buf, ng::move(buf, ng::range_t(18), kSelectionMoveToBeginOfTypingPair)),       "1:6");
-		TS_ASSERT_EQUALS(to_s(buf, ng::move(buf, ng::range_t(19), kSelectionMoveToBeginOfTypingPair)),      "1:20");
+	test::bundle_index_t bundleIndex;
+	bundleIndex.add(bundles::kItemTypeSettings, HighlightPairs);
+	bundleIndex.commit();
+}
 
-		TS_ASSERT_EQUALS(to_s(buf, ng::move(buf, ng::range_t( 0), kSelectionMoveToEndOfTypingPair)),           "1");
-		TS_ASSERT_EQUALS(to_s(buf, ng::move(buf, ng::range_t( 5), kSelectionMoveToEndOfTypingPair)),        "1:19");
-		TS_ASSERT_EQUALS(to_s(buf, ng::move(buf, ng::range_t( 6), kSelectionMoveToEndOfTypingPair)),        "1:18");
-		TS_ASSERT_EQUALS(to_s(buf, ng::move(buf, ng::range_t( 9), kSelectionMoveToEndOfTypingPair)),        "1:18");
-		TS_ASSERT_EQUALS(to_s(buf, ng::move(buf, ng::range_t(10), kSelectionMoveToEndOfTypingPair)),        "1:17");
-		TS_ASSERT_EQUALS(to_s(buf, ng::move(buf, ng::range_t(16), kSelectionMoveToEndOfTypingPair)),        "1:18");
-		TS_ASSERT_EQUALS(to_s(buf, ng::move(buf, ng::range_t(17), kSelectionMoveToEndOfTypingPair)),        "1:18");
-		TS_ASSERT_EQUALS(to_s(buf, ng::move(buf, ng::range_t(18), kSelectionMoveToEndOfTypingPair)),        "1:19");
-	}
+static std::string move (std::string input, move_unit_type action)
+{
+	static std::string const kMarker = "‸";
 
-	void test_brace_selection ()
-	{
-		ng::buffer_t buf;
-		buf.insert(0, "this (is (a test)).");
+	size_t pos = input.find(kMarker);
+	OAK_ASSERT_NE(pos, std::string::npos);
+	input.replace(pos, kMarker.size(), "");
 
-		TS_ASSERT_EQUALS(to_s(buf, ng::extend(buf, ng::ranges_t( 0), kSelectionExtendToTypingPair)),         "1");
-		TS_ASSERT_EQUALS(to_s(buf, ng::extend(buf, ng::ranges_t( 5), kSelectionExtendToTypingPair)),       "1:6");
-		TS_ASSERT_EQUALS(to_s(buf, ng::extend(buf, ng::ranges_t( 6), kSelectionExtendToTypingPair)),  "1:6-1:19");
-		TS_ASSERT_EQUALS(to_s(buf, ng::extend(buf, ng::ranges_t( 9), kSelectionExtendToTypingPair)),  "1:6-1:19");
-		TS_ASSERT_EQUALS(to_s(buf, ng::extend(buf, ng::ranges_t(10), kSelectionExtendToTypingPair)), "1:10-1:18");
-		TS_ASSERT_EQUALS(to_s(buf, ng::extend(buf, ng::ranges_t(16), kSelectionExtendToTypingPair)), "1:10-1:18");
-		TS_ASSERT_EQUALS(to_s(buf, ng::extend(buf, ng::ranges_t(17), kSelectionExtendToTypingPair)),  "1:6-1:19");
-		TS_ASSERT_EQUALS(to_s(buf, ng::extend(buf, ng::ranges_t(18), kSelectionExtendToTypingPair)),      "1:19");
-	}
+	ng::buffer_t buf;
+	buf.insert(0, input);
+	for(auto range : ng::move(buf, ng::range_t(pos), action))
+		buf.replace(range.min().index, range.max().index, "‸");
+	return buf.substr(0, buf.size());
+}
 
-	void test_brace_selection_full_line ()
-	{
-		ng::buffer_t buf;
-		buf.insert(0, "\t{\nfoo\n\t}\n");
+void test_brace_movement ()
+{
+	OAK_ASSERT_EQ(move("‸this (is (a test)).", kSelectionMoveToBeginOfTypingPair), "‸this (is (a test)).");
+	OAK_ASSERT_EQ(move("this ‸(is (a test)).", kSelectionMoveToBeginOfTypingPair), "this ‸(is (a test)).");
+	OAK_ASSERT_EQ(move("this (‸is (a test)).", kSelectionMoveToBeginOfTypingPair), "this (‸is (a test)).");
+	OAK_ASSERT_EQ(move("this (is ‸(a test)).", kSelectionMoveToBeginOfTypingPair), "this (‸is (a test)).");
+	OAK_ASSERT_EQ(move("this (is (‸a test)).", kSelectionMoveToBeginOfTypingPair), "this (‸is (a test)).");
+	OAK_ASSERT_EQ(move("this (is (a test‸)).", kSelectionMoveToBeginOfTypingPair), "this (is (‸a test)).");
+	OAK_ASSERT_EQ(move("this (is (a test)‸).", kSelectionMoveToBeginOfTypingPair), "this (is ‸(a test)).");
+	OAK_ASSERT_EQ(move("this (is (a test))‸.", kSelectionMoveToBeginOfTypingPair), "this ‸(is (a test)).");
+	OAK_ASSERT_EQ(move("this (is (a test)).‸", kSelectionMoveToBeginOfTypingPair), "this (is (a test)).‸");
 
-		TS_ASSERT_EQUALS(to_s(buf, ng::extend(buf, ng::ranges_t( 2), kSelectionExtendToTypingPair)), "1-4");
-	}
+	OAK_ASSERT_EQ(move("‸this (is (a test)).", kSelectionMoveToEndOfTypingPair), "‸this (is (a test)).");
+	OAK_ASSERT_EQ(move("this ‸(is (a test)).", kSelectionMoveToEndOfTypingPair), "this (is (a test))‸.");
+	OAK_ASSERT_EQ(move("this (‸is (a test)).", kSelectionMoveToEndOfTypingPair), "this (is (a test)‸).");
+	OAK_ASSERT_EQ(move("this (is ‸(a test)).", kSelectionMoveToEndOfTypingPair), "this (is (a test)‸).");
+	OAK_ASSERT_EQ(move("this (is (‸a test)).", kSelectionMoveToEndOfTypingPair), "this (is (a test‸)).");
+	OAK_ASSERT_EQ(move("this (is (a test‸)).", kSelectionMoveToEndOfTypingPair), "this (is (a test)‸).");
+	OAK_ASSERT_EQ(move("this (is (a test)‸).", kSelectionMoveToEndOfTypingPair), "this (is (a test)‸).");
+	OAK_ASSERT_EQ(move("this (is (a test))‸.", kSelectionMoveToEndOfTypingPair), "this (is (a test))‸.");
+	OAK_ASSERT_EQ(move("this (is (a test)).‸", kSelectionMoveToEndOfTypingPair), "this (is (a test)).‸");
+}
 
-	void test_highlight_pairs ()
-	{
-		ng::buffer_t buf;
-		buf.insert(0, "()[)");
+void test_bad_nesting ()
+{
+	OAK_ASSERT_EQ(move("(bad‸ly} nested)", kSelectionMoveToBeginOfTypingPair), "(‸badly} nested)");
+	OAK_ASSERT_EQ(move("(bad‸ly} nested)", kSelectionMoveToEndOfTypingPair),   "(badly} nested‸)");
+	OAK_ASSERT_EQ(move("{bad‸ly) nested}", kSelectionMoveToBeginOfTypingPair), "{‸badly) nested}");
+	OAK_ASSERT_EQ(move("{bad‸ly) nested}", kSelectionMoveToEndOfTypingPair),   "{badly) nested‸}");
 
-		ng::ranges_t caret = ng::range_t(1);
-		TS_ASSERT_EQUALS(to_s(ng::highlight_ranges_for_movement(buf, caret, ng::move(buf, caret, kSelectionMoveRight))), "[0-1]");
-		TS_ASSERT_EQUALS(to_s(ng::highlight_ranges_for_movement(buf, caret, ng::move(buf, caret, kSelectionMoveLeft))),  "[1-2]");
+	OAK_ASSERT_EQ(move("{(bad‸ly} nested)", kSelectionMoveToBeginOfTypingPair), "{‸(badly} nested)");
+	OAK_ASSERT_EQ(move("{(bad‸ly} nested)", kSelectionMoveToEndOfTypingPair),   "{(badly‸} nested)");
+	OAK_ASSERT_EQ(move("({bad‸ly) nested}", kSelectionMoveToBeginOfTypingPair), "(‸{badly) nested}");
+	OAK_ASSERT_EQ(move("({bad‸ly) nested}", kSelectionMoveToEndOfTypingPair),   "({badly‸) nested}");
+}
 
-		caret = ng::range_t(3);
-		TS_ASSERT_EQUALS(to_s(ng::highlight_ranges_for_movement(buf, caret, ng::move(buf, caret, kSelectionMoveRight))), "(empty)");
-		TS_ASSERT_EQUALS(to_s(ng::highlight_ranges_for_movement(buf, caret, ng::move(buf, caret, kSelectionMoveLeft))),  "(empty)");
-	}
-};
+void test_tag_movement ()
+{
+	OAK_ASSERT_EQ(move("<html></html‸>", kSelectionMoveToBeginOfTypingPair), "<html></html‸>");
+	OAK_ASSERT_EQ(move("<html></html>‸", kSelectionMoveToBeginOfTypingPair), "‸<html></html>");
+	OAK_ASSERT_EQ(move("<html><body></body‸></html>", kSelectionMoveToBeginOfTypingPair), "<html><body>‸</body></html>");
+	OAK_ASSERT_EQ(move("<html><body>‸</body></html>", kSelectionMoveToBeginOfTypingPair), "<html>‸<body></body></html>");
+
+	OAK_ASSERT_EQ(move("<‸html></html>", kSelectionMoveToEndOfTypingPair), "<‸html></html>");
+	OAK_ASSERT_EQ(move("‸<html></html>", kSelectionMoveToEndOfTypingPair), "<html></html>‸");
+	OAK_ASSERT_EQ(move("<html><‸body></body></html>", kSelectionMoveToEndOfTypingPair), "<html><body>‸</body></html>");
+	OAK_ASSERT_EQ(move("<html><body>‸</body></html>", kSelectionMoveToEndOfTypingPair), "<html><body></body>‸</html>");
+
+	OAK_ASSERT_EQ(move("<ul><li>first‸</li>  <li> <a> <b>hello</b> <em>world</em></a></li><li>third</li></ul>", kSelectionMoveToBeginOfTypingPair), "<ul><li>‸first</li>  <li> <a> <b>hello</b> <em>world</em></a></li><li>third</li></ul>");
+	OAK_ASSERT_EQ(move("<ul><li>first</li>‸  <li> <a> <b>hello</b> <em>world</em></a></li><li>third</li></ul>", kSelectionMoveToBeginOfTypingPair), "<ul>‸<li>first</li>  <li> <a> <b>hello</b> <em>world</em></a></li><li>third</li></ul>");
+	OAK_ASSERT_EQ(move("<ul><li>first</li> ‸ <li> <a> <b>hello</b> <em>world</em></a></li><li>third</li></ul>", kSelectionMoveToBeginOfTypingPair), "<ul>‸<li>first</li>  <li> <a> <b>hello</b> <em>world</em></a></li><li>third</li></ul>");
+	OAK_ASSERT_EQ(move("<ul><li>first</li>  <li‸> <a> <b>hello</b> <em>world</em></a></li><li>third</li></ul>", kSelectionMoveToBeginOfTypingPair), "<ul>‸<li>first</li>  <li> <a> <b>hello</b> <em>world</em></a></li><li>third</li></ul>");
+	OAK_ASSERT_EQ(move("<ul><li>first</li>  <li>‸ <a> <b>hello</b> <em>world</em></a></li><li>third</li></ul>", kSelectionMoveToBeginOfTypingPair), "<ul>‸<li>first</li>  <li> <a> <b>hello</b> <em>world</em></a></li><li>third</li></ul>");
+	OAK_ASSERT_EQ(move("<ul><li>first</li>  <li> <a> <b>hello</b>‸ <em>world</em></a></li><li>third</li></ul>", kSelectionMoveToBeginOfTypingPair), "<ul><li>first</li>  <li> <a> ‸<b>hello</b> <em>world</em></a></li><li>third</li></ul>");
+	OAK_ASSERT_EQ(move("<ul><li>first</li>  <li> <a> <b>hello</b> ‸<em>world</em></a></li><li>third</li></ul>", kSelectionMoveToBeginOfTypingPair), "<ul><li>first</li>  <li> <a>‸ <b>hello</b> <em>world</em></a></li><li>third</li></ul>");
+	OAK_ASSERT_EQ(move("<ul><li>first</li>  <li> <a> <b>hello</b> <em>world</em></a>‸</li><li>third</li></ul>", kSelectionMoveToBeginOfTypingPair), "<ul><li>first</li>  <li> ‸<a> <b>hello</b> <em>world</em></a></li><li>third</li></ul>");
+
+	OAK_ASSERT_EQ(move("<ul><li>first‸</li>  <li> <a> <b>hello</b> <em>world</em></a></li><li>third</li></ul>", kSelectionMoveToEndOfTypingPair), "<ul><li>first</li>  <li> <a> <b>hello</b> <em>world</em></a></li><li>third</li>‸</ul>");
+	OAK_ASSERT_EQ(move("<ul><li>first</li> ‸ <li> <a> <b>hello</b> <em>world</em></a></li><li>third</li></ul>", kSelectionMoveToEndOfTypingPair), "<ul><li>first</li>  <li> <a> <b>hello</b> <em>world</em></a></li><li>third</li>‸</ul>");
+	OAK_ASSERT_EQ(move("<ul><li>first</li>  <li> <a> <b>hello</b> ‸<em>world</em></a></li><li>third</li></ul>", kSelectionMoveToEndOfTypingPair), "<ul><li>first</li>  <li> <a> <b>hello</b> <em>world</em>‸</a></li><li>third</li></ul>");
+}
+
+void test_brace_selection ()
+{
+	ng::buffer_t buf;
+	buf.insert(0, "this (is (a test)).");
+
+	OAK_ASSERT_EQ(to_s(buf, ng::extend(buf, ng::ranges_t( 0), kSelectionExtendToTypingPair)),         "1");
+	OAK_ASSERT_EQ(to_s(buf, ng::extend(buf, ng::ranges_t( 5), kSelectionExtendToTypingPair)),       "1:6");
+	OAK_ASSERT_EQ(to_s(buf, ng::extend(buf, ng::ranges_t( 6), kSelectionExtendToTypingPair)),  "1:6-1:19");
+	OAK_ASSERT_EQ(to_s(buf, ng::extend(buf, ng::ranges_t( 9), kSelectionExtendToTypingPair)),  "1:6-1:19");
+	OAK_ASSERT_EQ(to_s(buf, ng::extend(buf, ng::ranges_t(10), kSelectionExtendToTypingPair)), "1:10-1:18");
+	OAK_ASSERT_EQ(to_s(buf, ng::extend(buf, ng::ranges_t(16), kSelectionExtendToTypingPair)), "1:10-1:18");
+	OAK_ASSERT_EQ(to_s(buf, ng::extend(buf, ng::ranges_t(17), kSelectionExtendToTypingPair)),  "1:6-1:19");
+	OAK_ASSERT_EQ(to_s(buf, ng::extend(buf, ng::ranges_t(18), kSelectionExtendToTypingPair)),      "1:19");
+}
+
+void test_brace_selection_full_line ()
+{
+	ng::buffer_t buf;
+	buf.insert(0, "\t{\nfoo\n\t}\n");
+
+	OAK_ASSERT_EQ(to_s(buf, ng::extend(buf, ng::ranges_t( 2), kSelectionExtendToTypingPair)), "1-4");
+}
+
+void test_highlight_pairs ()
+{
+	ng::buffer_t buf;
+	buf.insert(0, "()[)");
+
+	ng::ranges_t caret = ng::range_t(1);
+	OAK_ASSERT_EQ(to_s(ng::highlight_ranges_for_movement(buf, caret, ng::move(buf, caret, kSelectionMoveRight))), "[0-1]");
+	OAK_ASSERT_EQ(to_s(ng::highlight_ranges_for_movement(buf, caret, ng::move(buf, caret, kSelectionMoveLeft))),  "[1-2]");
+
+	caret = ng::range_t(3);
+	OAK_ASSERT_EQ(to_s(ng::highlight_ranges_for_movement(buf, caret, ng::move(buf, caret, kSelectionMoveRight))), "(empty)");
+	OAK_ASSERT_EQ(to_s(ng::highlight_ranges_for_movement(buf, caret, ng::move(buf, caret, kSelectionMoveLeft))),  "(empty)");
+}
+
+void test_tag_highlight_pairs ()
+{
+	ng::buffer_t buf;
+	buf.insert(0, "<a></a>");
+
+	ng::ranges_t caret = ng::range_t(1);
+	OAK_ASSERT_EQ(to_s(ng::highlight_ranges_for_movement(buf, caret, ng::move(buf, caret, kSelectionMoveLeft))),  "[3-7]");
+
+	caret = ng::range_t(6);
+	OAK_ASSERT_EQ(to_s(ng::highlight_ranges_for_movement(buf, caret, ng::move(buf, caret, kSelectionMoveRight))), "[0-3]");
+}

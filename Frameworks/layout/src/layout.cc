@@ -8,6 +8,9 @@
 #include <text/parse.h>
 #include <text/utf8.h>
 #include <text/ctype.h>
+#include <oak/debug.h>
+
+OAK_DEBUG_VAR(Layout);
 
 // ====================
 // = Helper Functions =
@@ -23,8 +26,8 @@ static size_t count_columns (ng::buffer_t const& buf, size_t from, size_t to)
 	size_t const tabSize = buf.indent().tab_size();
 	size_t col = 0;
 	std::string const str = buf.substr(from, to);
-	citerate(ch, diacritics::make_range(str.data(), str.data() + str.size()))
-		col += (*ch == '\t' ? tabSize - (col % tabSize) : (text::is_east_asian_width(*ch) ? 2 : 1));
+	for(auto ch : diacritics::make_range(str.data(), str.data() + str.size()))
+		col += (ch == '\t' ? tabSize - (col % tabSize) : (text::is_east_asian_width(ch) ? 2 : 1));
 	return col;
 }
 
@@ -290,14 +293,14 @@ namespace ng
 	std::vector<CGRect> layout_t::rects_for_ranges (ng::ranges_t const& ranges, kRectsIncludeMode mode) const
 	{
 		std::vector<CGRect> res;
-		citerate(range, ng::dissect_columnar(_buffer, ranges))
+		for(auto const& range : ng::dissect_columnar(_buffer, ranges))
 		{
-			if(mode == kRectsIncludeCarets && !range->empty() || mode == kRectsIncludeSelections && range->empty())
+			if(mode == kRectsIncludeCarets && !range.empty() || mode == kRectsIncludeSelections && range.empty())
 				continue;
 
-			bool includeCarry = range->freehanded;
-			auto r1 = rect_at_index(ng::index_t(range->first.index, includeCarry ? range->first.carry : 0));
-			auto r2 = rect_at_index(ng::index_t(range->last.index,  includeCarry ? range->last.carry  : 0));
+			bool includeCarry = range.freehanded;
+			auto r1 = rect_at_index(ng::index_t(range.first.index, includeCarry ? range.first.carry : 0));
+			auto r2 = rect_at_index(ng::index_t(range.last.index,  includeCarry ? range.last.carry  : 0));
 
 			if(CGRectEqualToRect(r1, r2))
 			{
@@ -305,7 +308,7 @@ namespace ng
 			}
 			else
 			{
-				auto firstRowIter = row_for_offset(range->first.index), lastRowIter = row_for_offset(range->last.index);
+				auto firstRowIter = row_for_offset(range.first.index), lastRowIter = row_for_offset(range.last.index);
 				if(CGRectGetMinY(r1) == CGRectGetMinY(r2) && CGRectGetHeight(r1) == CGRectGetHeight(r2))
 				{
 					res.push_back(OakRectMake(std::min(r1.origin.x, r2.origin.x), r1.origin.y, fabs(r2.origin.x - r1.origin.x), r1.size.height));
@@ -408,6 +411,7 @@ namespace ng
 
 	void layout_t::did_erase (size_t from, size_t to)
 	{
+		D(DBF_Layout, bug("%zu-%zu\n", from, to););
 		ASSERT_LE(from, to);
 		if(from == to)
 			return;
@@ -430,6 +434,30 @@ namespace ng
 			toRow->value.insert(base, prefixLenToInsert, _buffer, base);
 			update_row(toRow);
 			_rows.erase(fromRow, toRow);
+
+			std::vector< std::pair<size_t, size_t> > foldedRanges;
+			ssize_t nestCount = 0;
+			for(auto const& pair : _folds->folded())
+			{
+				if(pair.second && ++nestCount == 1)
+					foldedRanges.push_back(std::make_pair(pair.first, pair.first));
+				else if(!pair.second && --nestCount == 0)
+					foldedRanges.back().second = pair.first;
+			}
+
+			size_t insertFrom = base, insertTo = base + prefixLenToInsert;
+			for(auto const& range : foldedRanges)
+			{
+				D(DBF_Layout, bug("range: %zu-%zu\n", range.first, range.second););
+				if(range.second <= insertFrom || insertTo <= range.first)
+					continue;
+
+				did_erase(range.first, range.second);
+				auto row = row_for_offset(range.first);
+				row->value.insert_folded(range.first, range.second - range.first, _buffer, row->offset._length);
+				fullRefresh = update_row(row) || fullRefresh;
+			}
+
 			fullRefresh = true;
 		}
 		refresh_line_at_index(from, fullRefresh);
@@ -437,6 +465,7 @@ namespace ng
 
 	void layout_t::did_insert (size_t first, size_t last)
 	{
+		D(DBF_Layout, bug("%zu-%zu\n", first, last););
 		ASSERT_LE(first, last);
 		if(first == last)
 			return;
@@ -448,6 +477,7 @@ namespace ng
 		if(_buffer.convert(first).line != _buffer.convert(last).line)
 		{
 			suffixLen = row->offset._length + row->value.length() - first;
+			D(DBF_Layout, bug("multi-line insert, erase %zu-%zu\n", first, first + suffixLen););
 			row->value.erase(first, first + suffixLen, _buffer, row->offset._length);
 		}
 
@@ -467,6 +497,7 @@ namespace ng
 
 		if(suffixLen)
 		{
+			D(DBF_Layout, bug("multi-line insert, re-insert %zu-%zu\n", last, last + suffixLen););
 			row->value.insert(last, suffixLen, _buffer, row->offset._length);
 			fullRefresh = update_row(row) || fullRefresh;
 		}
@@ -477,22 +508,23 @@ namespace ng
 
 		std::vector< std::pair<size_t, size_t> > foldedRanges;
 		ssize_t nestCount = 0;
-		citerate(pair, _folds->folded())
+		for(auto const& pair : _folds->folded())
 		{
-			if(pair->second && ++nestCount == 1)
-				foldedRanges.push_back(std::make_pair(pair->first, pair->first));
-			else if(!pair->second && --nestCount == 0)
-				foldedRanges.back().second = pair->first;
+			if(pair.second && ++nestCount == 1)
+				foldedRanges.push_back(std::make_pair(pair.first, pair.first));
+			else if(!pair.second && --nestCount == 0)
+				foldedRanges.back().second = pair.first;
 		}
 
-		iterate(range, foldedRanges)
+		for(auto const& range : foldedRanges)
 		{
-			if(range->second <= first || last <= range->first)
+			D(DBF_Layout, bug("folded range: %zu-%zu\n", range.first, range.second););
+			if(range.second <= first || last + suffixLen <= range.first)
 				continue;
 
-			did_erase(range->first, range->second);
-			auto row = row_for_offset(range->first);
-			row->value.insert_folded(range->first, range->second - range->first, _buffer, row->offset._length);
+			did_erase(range.first, range.second);
+			auto row = row_for_offset(range.first);
+			row->value.insert_folded(range.first, range.second - range.first, _buffer, row->offset._length);
 			fullRefresh = update_row(row) || fullRefresh;
 		}
 
@@ -512,9 +544,9 @@ namespace ng
 			_pre_refresh_revision   = _buffer.revision();
 			_pre_refresh_caret      = selection.last().last.index;
 
-			iterate(range, highlightRanges)
+			for(auto const& range : highlightRanges)
 			{
-				CGRect const r = rect_for_range(range->min().index, range->max().index);
+				CGRect const r = rect_for_range(range.min().index, range.max().index);
 				OakRectDifference(CGRectInset(r, -2, -2), CGRectInset(r, -1, -1), back_inserter(_pre_refresh_highlight_border));
 				_pre_refresh_highlight_interior.push_back(CGRectInset(r, -1, -1));
 			}
@@ -573,9 +605,9 @@ namespace ng
 
 			std::vector<CGRect> postHighlightBorder;
 			std::vector<CGRect> postHighlightInterior;
-			iterate(range, highlightRanges)
+			for(auto const& range : highlightRanges)
 			{
-				CGRect const r = rect_for_range(range->min().index, range->max().index);
+				CGRect const r = rect_for_range(range.min().index, range.max().index);
 				OakRectDifference(CGRectInset(r, -2, -2), CGRectInset(r, -1, -1), back_inserter(postHighlightBorder));
 				postHighlightInterior.push_back(CGRectInset(r, -1, -1));
 			}
@@ -783,22 +815,22 @@ namespace ng
 		if(_draw_wrap_column)
 			render::fill_rect(context, baseColors.margin_indicator, OakRectMake(_margin.left + _metrics->column_width() * effective_wrap_column(), CGRectGetMinY(visibleRect), 1, CGRectGetHeight(visibleRect)));
 
-		citerate(range, selection)
+		for(auto const& range : selection)
 		{
-			citerate(rect, rects_for_ranges(*range, kRectsIncludeSelections))
+			for(auto const& rect : rects_for_ranges(range, kRectsIncludeSelections))
 			{
-				CGColorRef selColor = _theme->styles_for_scope(_buffer.scope(range->min().index).right).selection();
+				CGColorRef selColor = _theme->styles_for_scope(_buffer.scope(range.min().index).right).selection();
 				if(!_is_key)
 					selColor = CGColorCreateCopyWithAlpha(selColor, 0.5 * CGColorGetAlpha(selColor));
-				render::fill_rect(context, selColor, *rect);
+				render::fill_rect(context, selColor, rect);
 				if(!_is_key)
 					CFRelease(selColor);
 			}
 		}
 
-		iterate(range, highlightRanges)
+		for(auto const& range : highlightRanges)
 		{
-			CGRect const r = rect_for_range(range->min().index, range->max().index);
+			CGRect const r = rect_for_range(range.min().index, range.max().index);
 			render::fill_rect(context, baseColors.marked_text_border, CGRectInset(r, -2, -2));
 			render::fill_rect(context, baseColors.marked_text_background, CGRectInset(r, -1, -1));
 		}
@@ -808,10 +840,10 @@ namespace ng
 
 		if(_draw_caret && !_drop_marker)
 		{
-			citerate(range, selection)
+			for(auto const& range : selection)
 			{
-				citerate(rect, rects_for_ranges(*range, kRectsIncludeCarets))
-					render::fill_rect(context, _theme->styles_for_scope(_buffer.scope(range->min().index).right).caret(), *rect);
+				for(auto const& rect : rects_for_ranges(range, kRectsIncludeCarets))
+					render::fill_rect(context, _theme->styles_for_scope(_buffer.scope(range.min().index).right).caret(), rect);
 			}
 		}
 
@@ -836,8 +868,8 @@ namespace ng
 
 	void layout_t::remove_enclosing_folds (size_t from, size_t to)
 	{
-		citerate(range, _folds->remove_enclosing(from, to))
-			did_fold(range->first, range->second);
+		for(auto const& range : _folds->remove_enclosing(from, to))
+			did_fold(range.first, range.second);
 	}
 
 	void layout_t::toggle_fold_at_line (size_t n, bool recursive)
@@ -849,8 +881,8 @@ namespace ng
 
 	void layout_t::toggle_all_folds_at_level (size_t level)
 	{
-		citerate(range, _folds->toggle_all_at_level(level))
-			did_fold(range->first, range->second);
+		for(auto const& range : _folds->toggle_all_at_level(level))
+			did_fold(range.first, range.second);
 	}
 
 	// =================
@@ -867,17 +899,12 @@ namespace ng
 		return _rows.structural_integrity();
 	}
 
-	static std::string Buffer;
-
-	std::string layout_t::row_to_s (row_tree_t::value_type const& info)
-	{
-		return text::format("y: %.1f-%.1f, w: %1.f, bytes: %zu-%zu\n» %s\n%s", info.offset._height, info.offset._height + info.key._height, info.key._width, info.offset._length, info.offset._length + info.key._length, Buffer.substr(info.offset._length, info.key._length).c_str(), ng::to_s(info.value).c_str());
-	}
-
 	std::string layout_t::to_s () const
 	{
-		Buffer = _buffer.substr(0, _buffer.size());
-		return _rows.to_s(&row_to_s);
+		std::string const buffer = _buffer.substr(0, _buffer.size());
+		return _rows.to_s([&buffer](row_tree_t::value_type info){
+			return text::format("y: %.1f-%.1f, w: %1.f, bytes: %zu-%zu\n» %s\n%s", info.offset._height, info.offset._height + info.key._height, info.key._width, info.offset._length, info.offset._length + info.key._length, buffer.substr(info.offset._length, info.key._length).c_str(), ng::to_s(info.value).c_str());
+		});
 	}
 
 } /* ng */
