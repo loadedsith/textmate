@@ -1,5 +1,6 @@
 This is not the real Textmate, thats located [here](https://github.com/textmate/textmate). This is a fork which adds fold guides to the code, in a very hacky non-disableable kind of way. That said, if you need fold guides and love textmate, download this!
-
+![foldGuides](http://projects.bygph.com/earlyFoldGuides3.png)
+![foldGuidesAgain](http://projects.bygph.com/earlyFoldGuides4.png)
 # TextMate
 
 ## Download
