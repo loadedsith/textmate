@@ -1,4 +1,6 @@
 #include "storage.h"
+#include <crash/info.h>
+#include <text/format.h>
 
 namespace ng
 {
@@ -11,7 +13,7 @@ namespace ng
 		template <typename _InputIter>
 		memory_t::memory_t (_InputIter first, _InputIter last) : _offset(0)
 		{
-			_helper.reset(new helper_t(std::distance(first, last)));
+			_helper = std::make_shared<helper_t>(std::distance(first, last));
 			std::copy(first, last, _helper->bytes());
 		}
 
@@ -57,6 +59,7 @@ namespace ng
 
 		void storage_t::insert (size_t pos, char const* data, size_t length)
 		{
+			crash_reporter_info_t crashInfo(text::format("storage insert %zu, size %zu", pos, size()));
 			ASSERT_LE(pos, size());
 			if(length == 0)
 				return;
@@ -83,6 +86,7 @@ namespace ng
 
 		void storage_t::erase (size_t first, size_t last)
 		{
+			crash_reporter_info_t crashInfo(text::format("storage erase %zu-%zu, size %zu", first, last, size()));
 			ASSERT_LE(first, last); ASSERT_LE(last, size());
 
 			auto from = find_pos(first);
@@ -96,6 +100,7 @@ namespace ng
 
 		char storage_t::operator[] (size_t i) const
 		{
+			crash_reporter_info_t crashInfo(text::format("storage access %zu, size %zu", i, size()));
 			ASSERT_LE(i, size());
 			auto it = find_pos(i);
 			return it->value.bytes()[i - it->offset];
@@ -103,13 +108,14 @@ namespace ng
 
 		std::string storage_t::substr (size_t first, size_t last) const
 		{
+			crash_reporter_info_t crashInfo(text::format("storage access %zu-%zu, size %zu", first, last, size()));
 			ASSERT_LE(first, last); ASSERT_LE(last, size());
 			std::string res = "";
 
 			auto from = find_pos(first);
 			auto to = _tree.upper_bound(last, &comp_abs);
 
-			foreach(it, from, to)
+			for(auto it = from; it != to; ++it)
 			{
 				size_t i = std::max(it->offset, first) - it->offset;
 				size_t j = std::min(it->offset + it->key, last) - it->offset;

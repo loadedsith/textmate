@@ -109,6 +109,7 @@ namespace ng
 		text::indent_t const& indent () const             { return _indent; }
 
 		bool set_grammar (bundles::item_ptr const& grammarItem);
+		parse::grammar_ptr grammar () const { return _grammar; }
 
 		scope::context_t scope (size_t i, bool includeDynamic = true) const;
 		std::map<size_t, scope::scope_t> scopes (size_t from, size_t to) const;
@@ -121,7 +122,9 @@ namespace ng
 		void set_spelling_language (std::string const& lang);
 		std::string const& spelling_language () const;
 		std::map<size_t, bool> misspellings (size_t from, size_t to) const;
+		std::pair<size_t, size_t> next_misspelling (size_t from) const;
 		ns::spelling_tag_t spelling_tag () const;
+		void recheck_spelling (size_t from, size_t to);
 
 		pairs_t& pairs ()              { return *_pairs.get(); }
 		pairs_t const& pairs () const  { return *_pairs.get(); }

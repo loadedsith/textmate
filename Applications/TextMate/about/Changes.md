@@ -1,5 +1,22 @@
 # Changes
 
+## 2013-09-06 ([v2.0-alpha.9477](https://github.com/textmate/textmate/compare/v2.0-alpha.9475...v2.0-alpha.9477))
+
+* Edit → Spelling → Check Spelling (⌘;) has been implemented. This will select the next misspelled word and, if the spelling panel is not showing, open a context menu with guesses, otherwise, it’ll update the spelling panel. *[Adam Strzelecki]*
+* When all of the open documents don’t fit in the tab bar, the last visible tab is used as a proxy tab with an attached menu to select between non-visible documents. *[Ronald Wampler]*
+* The format string syntax now supports `\x{HHHH}` for unicode code points and `\xHH` for raw byte values (normally you would only use the former syntax).
+
+## 2013-08-26 ([v2.0-alpha.9475](https://github.com/textmate/textmate/compare/v2.0-alpha.9459...v2.0-alpha.9475))
+
+* Support `${var}` in regexp part of format string transformations. For example if you wish the file name in the window title to be relative to `$CWD` (current directory of the `.tm_properties` file) then you can now add:
+
+        windowTitle = '${TM_FILEPATH:?${TM_FILEPATH/${CWD}.//}:$TM_DISPLAYNAME}$windowTitleProject$windowTitleSCM'
+
+    The example makes use of two constructs, the outer being `${var:?«if set»:«if not set»}` and the inner being the regexp substitution. I used `.` to match the trailing slash that we also want to remove, mainly to avoid having to use escapes (if we wanted to use a literal slash).
+
+* Using ⌃T has been improved for the case where two “things” are selected delimited by some operator. It will now swap the two “things” rather than reverse the characters. You can see [examples in the test file](https://github.com/textmate/textmate/blob/master/Frameworks/editor/tests/t_transform.cc).
+* Miscellaneous fixes and improvements — as usual, click the link above for full commit history.
+
 ## 2013-08-02 ([v2.0-alpha.9459](https://github.com/textmate/textmate/compare/a9455...v2.0-alpha.9459))
 
 * TextMate now listens to `rmate` connections via IPv6 meaning that if you are using an ssh tunnel, you should use `localhost` instead of `127.0.0.1`. Also worth mentioning that `rmate` is once again a [standalone script](https://github.com/textmate/rmate) that can be installed without needing rubygems.

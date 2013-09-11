@@ -50,7 +50,7 @@ namespace scm
 		fs::snapshot_t _fs_snapshot;
 
 		bool _pending_update = false;
-		std::chrono::steady_clock::time_point _no_check_before = std::chrono::steady_clock::now();
+		dispatch_time_t _no_check_before = DISPATCH_TIME_NOW;
 		std::shared_ptr<watcher_t> _watcher;
 		std::set<info_t*> _clients;
 	};
@@ -151,7 +151,7 @@ namespace scm
 		_clients.insert(client);
 		if(_clients.size() == 1)
 		{
-			_watcher.reset(new scm::watcher_t(_root_path, std::bind(&shared_info_t::fs_did_change, this, std::placeholders::_1)));
+			_watcher = std::make_shared<scm::watcher_t>(_root_path, std::bind(&shared_info_t::fs_did_change, this, std::placeholders::_1));
 			schedule_update();
 		}
 		else
@@ -205,7 +205,7 @@ namespace scm
 				if(shared_info_ptr info = weakThis.lock())
 				{
 					info->_pending_update  = false;
-					info->_no_check_before = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+					info->_no_check_before = dispatch_time(DISPATCH_TIME_NOW, 3 * NSEC_PER_SEC);
 				}
 			});
 		}
@@ -223,12 +223,9 @@ namespace scm
 			return;
 		_pending_update = true;
 
-		auto now = std::chrono::steady_clock::now();
-		dispatch_time_t delay = now < _no_check_before ? dispatch_time(DISPATCH_TIME_NOW, std::chrono::duration_cast<std::chrono::duration<int64_t, std::nano>>(_no_check_before - now).count()) : DISPATCH_TIME_NOW;
-
 		shared_info_weak_ptr weakThis = shared_from_this();
 		static dispatch_queue_t queue = dispatch_queue_create("org.textmate.scm.status", DISPATCH_QUEUE_SERIAL);
-		dispatch_after(delay, queue, ^{
+		dispatch_after(_no_check_before, queue, ^{
 			async_update(weakThis);
 		});
 	}
@@ -275,7 +272,7 @@ namespace scm
 			{
 				if(driver && driver->has_info_for_directory(cwd))
 				{
-					shared_info_ptr res(new shared_info_t(cwd, driver));
+					auto res = std::make_shared<shared_info_t>(cwd, driver);
 					cache()[cwd] = res;
 					return res;
 				}
@@ -340,7 +337,7 @@ namespace scm
 		if(!scm_enabled_for_path(path))
 			return info_ptr();
 
-		info_ptr res(new info_t(path));
+		auto res = std::make_shared<info_t>(path);
 
 		__block bool performBackgroundDriverSearch = true;
 		dispatch_sync(cache_access_queue(), ^{

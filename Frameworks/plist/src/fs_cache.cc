@@ -1,4 +1,7 @@
 #include "fs_cache.h"
+#include "cache.capnp.h"
+#include <capnp/message.h>
+#include <capnp/serialize-packed.h>
 #include <io/entries.h>
 #include <text/format.h>
 #include <oak/debug.h>
@@ -26,53 +29,134 @@ static std::string read_link (std::string const& path)
 namespace plist
 {
 	int32_t const cache_t::kPropertyCacheFormatVersion = 2;
+	uint32_t const kCapnpCacheFormatVersion = 2;
 
-	void cache_t::load (std::string const& path, plist::dictionary_t (*prune_dictionary)(plist::dictionary_t const&))
+	void cache_t::load (std::string const& path)
 	{
-		_prune_dictionary = prune_dictionary;
-
 		int32_t version;
 		auto plist = plist::load(path);
 		if(plist::get_key_path(plist, "version", version) && version == kPropertyCacheFormatVersion)
 		{
-			for(auto pair : plist)
+			for(auto const& pair : plist)
 			{
 				if(plist::dictionary_t const* node = boost::get<plist::dictionary_t>(&pair.second))
 				{
-					entry_type_t type = entry_type_t::directory;
-					plist::dictionary_t content;
-					std::string link = NULL_STR;
-					bool flag;
-
-					if(plist::get_key_path(*node, "content", content))
-						type = entry_type_t::file;
-					else if(plist::get_key_path(*node, "link", link))
-						type = entry_type_t::link;
-					else if(plist::get_key_path(*node, "missing", flag) && flag)
-						type = entry_type_t::missing;
-
-					entry_t entry(pair.first, type, link);
-					entry.set_content(content);
-					oak::date_t modified;
-					if(plist::get_key_path(*node, "modified", modified))
-						entry.set_modified(modified.time_value());
-
-					plist::array_t array;
-					std::string globString;
-					if(plist::get_key_path(*node, "entries", array) && plist::get_key_path(*node, "glob", globString))
+					entry_t entry(pair.first);
+					for(auto const& pair : *node)
 					{
-						std::vector<std::string> v;
-						for(auto path : array)
-							v.push_back(boost::get<std::string>(path));
-						entry.set_entries(v, globString);
+						if(pair.first == "content" && boost::get<plist::dictionary_t>(&pair.second))
+						{
+							entry.set_type(entry_type_t::file);
+							entry.set_content(boost::get<plist::dictionary_t>(pair.second));
+						}
+						else if(pair.first == "link" && boost::get<std::string>(&pair.second))
+						{
+							entry.set_type(entry_type_t::link);
+							entry.set_link(boost::get<std::string>(pair.second));
+						}
+						else if(pair.first == "missing" && boost::get<bool>(&pair.second) && boost::get<bool>(pair.second))
+						{
+							entry.set_type(entry_type_t::missing);
+						}
+						else if(pair.first == "entries" && boost::get<plist::array_t>(&pair.second))
+						{
+							std::vector<std::string> v;
+							for(auto path : boost::get<plist::array_t>(pair.second))
+								v.push_back(boost::get<std::string>(path));
+
+							entry.set_type(entry_type_t::directory);
+							entry.set_entries(v);
+						}
+						else if(pair.first == "glob" && boost::get<std::string>(&pair.second))
+						{
+							entry.set_glob_string(boost::get<std::string>(pair.second));
+						}
+						else if(pair.first == "modified" && boost::get<oak::date_t>(&pair.second))
+						{
+							entry.set_modified(boost::get<oak::date_t>(pair.second).time_value());
+						}
+						else if(pair.first == "eventId" && boost::get<uint64_t>(&pair.second))
+						{
+							entry.set_event_id(boost::get<uint64_t>(pair.second));
+						}
 					}
 
-					uint64_t eventId;
-					if(plist::get_key_path(*node, "eventId", eventId))
-						entry.set_event_id(eventId);
-
-					_cache.emplace(pair.first, entry);
+					if(entry.type() != entry_type_t::unknown)
+						_cache.emplace(pair.first, entry);
 				}
+			}
+		}
+	}
+
+	void cache_t::load_capnp (std::string const& path)
+	{
+		int fd = open(path.c_str(), O_RDONLY|O_CLOEXEC);
+		if(fd != -1)
+		{
+			capnp::PackedFdMessageReader message(kj::AutoCloseFd{fd});
+			auto cache = message.getRoot<Cache>();
+			if(cache.getVersion() != kCapnpCacheFormatVersion)
+			{
+				fprintf(stderr, "skip ‘%s’ version %u (expected %u)\n", path.c_str(), cache.getVersion(), kCapnpCacheFormatVersion);
+				return;
+			}
+
+			for(auto src : cache.getEntries())
+			{
+				entry_t entry(src.getPath());
+				switch(src.getType().which())
+				{
+					case Entry::Type::Which::FILE:
+					{
+						entry.set_type(entry_type_t::file);
+						entry.set_modified(src.getType().getFile().getModified());
+
+						plist::dictionary_t plist;
+						for(auto pair : src.getType().getFile().getContent())
+						{
+							if(pair.hasValue())
+							{
+								plist.emplace(pair.getKey(), std::string(pair.getValue()));
+							}
+							else
+							{
+								auto array = pair.getPlist();
+								plist.emplace(pair.getKey(), plist::parse(std::string(array.begin(), array.end())));
+							}
+						}
+						entry.set_content(plist);
+					}
+					break;
+
+					case Entry::Type::Which::DIRECTORY:
+					{
+						entry.set_type(entry_type_t::directory);
+						entry.set_event_id(src.getType().getDirectory().getEventId());
+						entry.set_glob_string(src.getType().getDirectory().getGlob());
+
+						std::vector<std::string> v;
+						for(auto path : src.getType().getDirectory().getItems())
+							v.push_back(path);
+						entry.set_entries(v);
+					}
+					break;
+
+					case Entry::Type::Which::LINK:
+					{
+						entry.set_type(entry_type_t::link);
+						entry.set_link(src.getType().getLink());
+					}
+					break;
+
+					case Entry::Type::Which::MISSING:
+					{
+						entry.set_type(entry_type_t::missing);
+					}
+					break;
+				}
+
+				if(entry.type() != entry_type_t::unknown)
+					_cache.emplace(src.getPath(), entry);
 			}
 		}
 	}
@@ -111,6 +195,80 @@ namespace plist
 		}
 		plist["version"] = kPropertyCacheFormatVersion;
 		plist::save(path, plist);
+	}
+
+	void cache_t::save_capnp (std::string const& path) const
+	{
+		D(DBF_Plist_Cache, bug("%s\n", path.c_str()););
+
+		capnp::MallocMessageBuilder message;
+		auto cache = message.initRoot<Cache>();
+		cache.setVersion(kCapnpCacheFormatVersion);
+		auto entries = cache.initEntries(_cache.size());
+
+		size_t i = 0;
+		for(auto pair : _cache)
+		{
+			auto entry = entries[i++];
+			entry.setPath(pair.first);
+
+			if(pair.second.is_file())
+			{
+				auto file = entry.getType().initFile();
+				file.setModified(pair.second.modified());
+
+				auto const& plist = pair.second.content();
+				auto content = file.initContent(plist.size());
+				size_t j = 0;
+				for(auto src : plist)
+				{
+					auto dst = content[j++];
+					dst.setKey(src.first);
+					if(std::string const* str = boost::get<std::string>(&src.second))
+					{
+						dst.setValue(str->c_str());
+					}
+					else
+					{
+						if(CFPropertyListRef cfPlist = plist::create_cf_property_list(src.second))
+						{
+							if(CFDataRef data = CFPropertyListCreateData(kCFAllocatorDefault, cfPlist, kCFPropertyListBinaryFormat_v1_0, 0, nullptr))
+							{
+								dst.setPlist(capnp::Data::Reader(CFDataGetBytePtr(data), CFDataGetLength(data)));
+								CFRelease(data);
+							}
+							CFRelease(cfPlist);
+						}
+					}
+				}
+			}
+			else if(pair.second.is_directory())
+			{
+				auto dir = entry.getType().initDirectory();
+				dir.setGlob(pair.second.glob_string());
+				dir.setEventId(pair.second.event_id());
+
+				auto const& v = pair.second.entries();
+				auto items = dir.initItems(v.size());
+				for(size_t j = 0; j < v.size(); ++j)
+					items.set(j, v[j]);
+			}
+			else if(pair.second.is_link())
+			{
+				entry.getType().setLink(pair.second.link());
+			}
+			else if(pair.second.is_missing())
+			{
+				entry.getType().setMissing();
+			}
+		}
+
+		int fd = open(path.c_str(), O_CREAT|O_TRUNC|O_WRONLY|O_CLOEXEC, S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP|S_IROTH);
+		if(fd != -1)
+		{
+			writePackedMessageToFd(fd, message);
+			close(fd);
+		}
 	}
 
 	uint64_t cache_t::event_id_for_path (std::string const& path) const
@@ -189,7 +347,7 @@ namespace plist
 		if(it == _cache.end())
 		{
 			D(DBF_Plist_Cache, bug("no entry for ‘%s’\n", path.c_str()););
-			return dirty;
+			return path::is_absolute(path) && path != "/" ? reload(path::parent(path), recursive) : dirty;
 		}
 
 		struct stat buf;
@@ -254,25 +412,33 @@ namespace plist
 		auto it = _cache.find(path);
 		if(it == _cache.end())
 		{
-			entry_type_t type = entry_type_t::missing;
+			entry_t entry(path);
+			entry.set_type(entry_type_t::missing);
 
 			struct stat buf;
 			D(DBF_Plist_Cache, bug("lstat ‘%s’\n", path.c_str()););
 			if(lstat(path.c_str(), &buf) == 0)
 			{
 				if(S_ISREG(buf.st_mode))
-					type = entry_type_t::file;
+				{
+					entry.set_type(entry_type_t::file);
+				}
 				else if(S_ISLNK(buf.st_mode))
-					type = entry_type_t::link;
+				{
+					entry.set_type(entry_type_t::link);
+					entry.set_link(read_link(path));
+				}
 				else if(S_ISDIR(buf.st_mode))
-					type = entry_type_t::directory;
+				{
+					entry.set_type(entry_type_t::directory);
+				}
 			}
 
-			entry_t entry(path, type, type == entry_type_t::link ? read_link(path) : NULL_STR);
 			if(entry.is_file())
 			{
 				D(DBF_Plist_Cache, bug("load ‘%s’\n", path.c_str()););
-				entry.set_content(_prune_dictionary(plist::load(path)));
+				auto const content = plist::load(path);
+				entry.set_content(_prune_dictionary ? _prune_dictionary(content) : content);
 				entry.set_modified(buf.st_mtimespec.tv_sec);
 			}
 			else if(entry.is_directory())

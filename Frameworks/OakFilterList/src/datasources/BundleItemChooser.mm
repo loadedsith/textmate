@@ -247,7 +247,7 @@ static NSString* const AllScopes    = @"AllScopes";
 	}
 
 	int groupCount = [self numberOfGroupsInScopeBar:scopeBar];
-	int key = 0;
+	char key = 0;
 	for(NSUInteger groupIndex = 0; groupIndex < groupCount; ++groupIndex)
 	{
 		NSArray* identifiers = [self scopeBar:scopeBar itemIdentifiersForGroup:groupIndex];
@@ -255,7 +255,7 @@ static NSString* const AllScopes    = @"AllScopes";
 		{
 			NSString* identifier   = [identifiers objectAtIndex:index];
 			NSString* label        = [self scopeBar:scopeBar titleOfItem:identifier inGroup:groupIndex];
-			NSMenuItem* item       = [aMenu addItemWithTitle:label action:@selector(takeSelectedItemFrom:) keyEquivalent:++key < 10 ? [NSString stringWithFormat:@"%c", '0' + (key % 10)] : @""];
+			NSMenuItem* item       = [aMenu addItemWithTitle:label action:@selector(takeSelectedItemFrom:) keyEquivalent:key < 10 ? [NSString stringWithFormat:@"%c", '0' + (++key % 10)] : @""];
 			item.representedObject = identifier;
 			item.tag               = groupIndex;
 			if([[scopeBar.selectedItems objectAtIndex:groupIndex] containsObject:identifier])
@@ -312,7 +312,7 @@ static std::vector<bundles::item_ptr> relevant_items_in_scope (search::type sear
 
 	std::map<std::string, bundles::item_ptr, text::less_t> sorted;
 	citerate(item, bundles::query(bundles::kFieldAny, NULL_STR, scope, kindMask, oak::uuid_t(), false))
-		sorted.insert(std::make_pair(full_name_with_selection(*item, hasSelection), *item));
+		sorted.emplace(full_name_with_selection(*item, hasSelection), *item);
 
 	std::vector<bundles::item_ptr> res;
 	std::transform(sorted.begin(), sorted.end(), back_inserter(res), [](std::pair<std::string, bundles::item_ptr> const& p){ return p.second; });
@@ -429,7 +429,7 @@ static std::vector<bundles::item_ptr> relevant_items_in_scope (search::type sear
 			BundleItemChooserItem* item = [BundleItemChooserItem new];
 			[item setIndex:index];
 			[item setUuid:all_items[index]->uuid()];
-			rankedItems.insert(std::make_pair(0, item));
+			rankedItems.emplace(0, item);
 		}
 	}
 	else
@@ -458,7 +458,7 @@ static std::vector<bundles::item_ptr> relevant_items_in_scope (search::type sear
 			BundleItemChooserItem* item = [BundleItemChooserItem new];
 			[item setIndex:index];
 			[item setUuid:all_items[index]->uuid()];
-			rankedItems.insert(std::make_pair(rank, item));
+			rankedItems.emplace(rank, item);
 		}
 	}
 

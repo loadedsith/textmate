@@ -16,7 +16,7 @@ struct track_paths_t
 		int fd = open_file(path, &exists);
 		if(fd != -1)
 		{
-			_open_files.insert(std::make_pair(path, std::make_pair(fd, exists)));
+			_open_files.emplace(path, std::make_pair(fd, exists));
 			_track_fds.watch(fd);
 		}
 	}
@@ -77,12 +77,12 @@ private:
 				close(fd);
 			});
 
-			record_ptr record(new record_t(source));
+			auto record = std::make_shared<record_t>(source);
 			dispatch_source_set_event_handler(source, ^{
 				record->changed = true;
 			});
 
-			_records.insert(std::make_pair(fd, record));
+			_records.emplace(fd, record);
 			dispatch_resume(source);
 		}
 

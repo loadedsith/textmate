@@ -1,9 +1,10 @@
 #import <ns/spellcheck.h>
 #import <AppKit/NSApplication.h>
 
-__attribute__((constructor)) static void setup ()
+void setup ()
 {
 	NSApplicationLoad();
+	[NSSpellChecker sharedSpellChecker];
 }
 
 void test_spellcheck ()

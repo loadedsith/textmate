@@ -8,28 +8,79 @@
 OAK_DEBUG_VAR(Parser);
 OAK_DEBUG_VAR(Parser_Flow);
 
+namespace
+{
+	struct scopes_t
+	{
+		void add (size_t pos, std::string const& scope)
+		{
+			map.emplace(pos, record_t(scope, true));
+		}
+
+		void remove (size_t pos, std::string const& scope, bool endRule = false)
+		{
+			map.emplace_hint(endRule ? map.end() : map.lower_bound(pos), pos, record_t(scope, false));
+		}
+
+		scope::scope_t update (scope::scope_t scope, std::map<size_t, scope::scope_t>& out) const
+		{
+			D(DBF_Parser, bug("%s\n", to_s(scope).c_str()););
+
+			size_t pos = 0;
+
+			for(auto const& pair : map)
+			{
+				D(DBF_Parser, bug("%3zu: %c%s\n", pair.first, pair.second.add ? '+' : '-', pair.second.scope.c_str()););
+				if(pos != pair.first)
+				{
+					out.emplace(pos, scope);
+					pos = pair.first;
+				}
+
+				if(pair.second.add)
+				{
+					scope.push_scope(pair.second.scope);
+				}
+				else
+				{
+					if(scope.back() == pair.second.scope)
+					{
+						scope.pop_scope();
+					}
+					else
+					{
+						std::vector<std::string> stack;
+						while(scope.back() != pair.second.scope)
+						{
+							D(DBF_Parser, bug("%s != %s\n", scope.back().c_str(), pair.second.scope.c_str()););
+							stack.emplace_back(scope.back());
+							scope.pop_scope();
+						}
+						scope.pop_scope();
+						for(auto it = stack.rbegin(); it != stack.rend(); ++it)
+							scope.push_scope(*it);
+					}
+				}
+				D(DBF_Parser, bug("→ %s\n", to_s(scope).c_str()););
+			}
+
+			out.emplace(pos, scope);
+			return scope;
+		}
+
+	private:
+		struct record_t
+		{
+			record_t (std::string const& scope, bool add) : scope(scope), add(add) { }
+			std::string scope;
+			bool add;
+		};
+		std::multimap<size_t, record_t> map;
+	};
+}
+
 namespace parse
 {
-	std::vector< std::pair<scope::selector_t, rule_ptr> >& injected_grammars ()
-	{
-		static std::vector< std::pair<scope::selector_t, rule_ptr> > res;
-		static bool needs_setup = true;
-		if(needs_setup)
-		{
-			needs_setup = false;
-			citerate(item, bundles::query(bundles::kFieldAny, NULL_STR, scope::wildcard, bundles::kItemTypeGrammar))
-			{
-				std::string injectionSelector = (*item)->value_for_field(bundles::kFieldGrammarInjectionSelector);
-				if(injectionSelector != NULL_STR)
-				{
-					if(grammar_ptr grammar = parse_grammar(*item))
-						res.push_back(std::make_pair(injectionSelector, grammar->seed()->rule));
-				}
-			}
-		}
-		return res;
-	}
-
 	size_t rule_t::rule_id_counter = 0;
 
 	bool equal (stack_ptr lhs, stack_ptr rhs)
@@ -44,64 +95,16 @@ namespace parse
 		return res;
 	}
 
-	static bool pattern_is_anchored (std::string const& ptrn)
+	static OnigOptionType anchor_options (bool isFirstLine, bool isGPos, char const* first, char const* last)
 	{
-		bool escape = false;
-		iterate(it, ptrn)
-		{
-			if(escape && strchr("AGz", *it))
-			{
-				D(DBF_Parser, bug("%s: %s\n", ptrn.c_str(), "YES"););
-				return true;
-			}
-			escape = !escape && *it == '\\';
-		}
-		D(DBF_Parser, bug("%s: %s\n", ptrn.c_str(), "NO"););
-		return false;
-	}
-	
-	static regexp::pattern_t fix_anchor (regexp::pattern_t const& ptrn, size_t anchor, size_t offset, bool firstLine)
-	{
-		if(!pattern_is_anchored(to_s(ptrn)))
-			return ptrn;
-
-		bool escape = false;
-		std::string newPatternString("");
-		citerate(it, to_s(ptrn))
-		{
-			if(escape)
-			{
-				if(*it == 'A' && !firstLine)
-				{
-					newPatternString += NULL_STR; // we need something that can never match
-				}
-				else if(*it == 'G' && anchor != offset)
-				{
-					newPatternString += NULL_STR; // we need something that can never match
-				}
-				else if(*it == 'z')
-				{
-					newPatternString += "$(?!\n)(?<!\n)";
-				}
-				else
-				{
-					newPatternString += '\\';
-					newPatternString += *it;
-				}
-				escape = false;
-			}
-			else if(*it == '\\')
-			{
-				escape = true;
-			}
-			else
-			{
-				newPatternString += *it;
-			}
-		}
-		ASSERT(!escape);
-		D(DBF_Parser, bug("%s → %s\n", to_s(ptrn).c_str(), newPatternString.c_str()););
-		return newPatternString;
+		OnigOptionType res = ONIG_OPTION_NONE;
+		if(!isFirstLine)
+			res |= ONIG_OPTION_NOTBOS;
+		if(!isGPos)
+			res |= ONIG_OPTION_NOTGPOS;
+		if(first != last && last[-1] == '\n')
+			res |= ONIG_OPTION_NOTEOS;
+		return res;
 	}
 
 	template <typename _OutputIter>
@@ -166,9 +169,11 @@ namespace parse
 
 	struct ranked_match_t
 	{
-		rule_ptr rule;
+		ranked_match_t (rule_t const* rule, regexp::match_t const& match, size_t rank, bool is_end_pattern = false) : rule(rule), match(match), rank(rank), is_end_pattern(is_end_pattern) { }
+		rule_t const* rule;
 		regexp::match_t match;
 		size_t rank;
+		bool is_end_pattern;
 
 		WATCH_LEAKS(ranked_match_t);
 
@@ -178,12 +183,14 @@ namespace parse
 		}
 	};
 
-	static scope::scope_t create_scope (scope::scope_t const& current_scope, std::string const& format_string, regexp::match_t const& match)
+	static std::string expand (std::string const& scopeString, regexp::match_t const& match)
 	{
-		return current_scope.append(pattern_is_format_string(format_string) ? format_string::expand(format_string, match.captures()) : format_string, true);
+		return pattern_is_format_string(scopeString) ? format_string::expand(scopeString, match.captures()) : scopeString;
 	}
 
-	static void apply_captures (scope::scope_t scope, regexp::match_t const& m, repository_ptr const& captures, std::map<size_t, scope::scope_t>& res, bool firstLine)
+	static stack_ptr parse (char const* first, char const* last, stack_ptr stack, scopes_t& scopes, bool firstLine, size_t i);
+
+	static void apply_captures (scope::scope_t const& scope, regexp::match_t const& m, repository_ptr const& captures, scopes_t& scopes, bool firstLine)
 	{
 		if(!captures)
 			return;
@@ -194,144 +201,154 @@ namespace parse
 		std::multimap<std::string, std::pair<size_t, size_t> >::const_iterator indexIter = m.capture_indices().begin();
 		while(ruleIter != captures->end() && indexIter != m.capture_indices().end())
 		{
-			if(ruleIter->first == indexIter->first)
-				rules.insert(std::make_pair(std::make_pair(indexIter->second.first, -(indexIter->second.second - indexIter->second.first)), ruleIter->second));
+			if(ruleIter->first == indexIter->first && indexIter->second.first != indexIter->second.second)
+				rules.emplace(std::make_pair(indexIter->second.first, -(indexIter->second.second - indexIter->second.first)), ruleIter->second);
 
 			if(ruleIter->first < indexIter->first)
 					++ruleIter;
 			else	++indexIter;
 		}
 
-		std::vector< std::pair<size_t, scope::scope_t> > stack;
 		iterate(it, rules)
 		{
 			size_t from = it->first.first;
-			for(; !stack.empty() && stack.back().first <= from; stack.pop_back())
-				scope = res[stack.back().first] = stack.back().second;
-
 			size_t to = it->first.first - it->first.second;
-			stack.push_back(std::make_pair(to, scope));
 
 			rule_ptr const& rule = it->second;
 			if(rule->scope_string != NULL_STR)
-				scope = res[from] = create_scope(scope, rule->scope_string, m);
+			{
+				std::string const scopeString = expand(rule->scope_string, m);
+				scopes.add(from, scopeString);
+				scopes.remove(to, scopeString);
+			}
 
 			if(!rule->children.empty())
 			{
 				D(DBF_Parser, bug("re-parse: ‘%.*s’ (range %zu-%zu)\n", (int)(to - from), m.buffer() + from, from, to););
-				parse::stack_ptr stack(new parse::stack_t(rule, scope));
+				auto stack = std::make_shared<parse::stack_t>(rule.get(), scope);
 				stack->anchor = from;
-				parse(m.buffer(), m.buffer() + to, stack, res, firstLine, from);
+				parse(m.buffer(), m.buffer() + to, stack, scopes, firstLine, from);
 			}
 		}
-
-		for(; !stack.empty(); stack.pop_back())
-			scope = res[stack.back().first] = stack.back().second;
 	}
 
-	static size_t collect_children (rule_ptr const& base, char const* first, char const* last, size_t anchor, size_t i, bool firstLine, std::vector<rule_ptr> const& children, std::set<ranked_match_t>& res, std::map<size_t, regexp::match_t>& match_cache, std::set<size_t>& unique, size_t rank = 0);
+	static void collect_children (std::vector<rule_ptr> const& children, std::vector<rule_t*>& res, std::vector<rule_t*>* groups);
 
-	static size_t collect_rule (rule_ptr const& base, char const* first, char const* last, size_t anchor, size_t i, bool firstLine, rule_ptr rule, std::set<ranked_match_t>& res, std::map<size_t, regexp::match_t>& match_cache, std::set<size_t>& unique, size_t rank)
+	static void collect_rule (rule_t* rule, std::vector<rule_t*>& res, std::vector<rule_t*>* groups)
 	{
-		if(unique.find(rule->rule_id) != unique.end())
-			return rank;
-
-		unique.insert(rule->rule_id);
-		while(rule && rule->include_string != NULL_STR)
+		while(rule && rule->include && !rule->included)
 		{
-			std::string const& name = rule->include_string;
-			if(rule = rule->include.lock())
+			if(groups)
 			{
-				if(unique.find(rule->rule_id) != unique.end())
-					break;
-				unique.insert(rule->rule_id);
+				rule->included = true;
+				groups->push_back(rule);
 			}
-			else if(name == "$base")
-			{
-				rule = base;
-				if(unique.find(rule->rule_id) != unique.end())
-					break;
-				unique.insert(rule->rule_id);
-			}
-			else
-			{
-				fprintf(stderr, "failed to resolve %s\n", name.c_str());
-			}
+			rule = rule->include;
 		}
 
-		if(!rule)
-			return rank;
+		if(!rule || rule->included)
+			return;
 
 		if(rule->match_pattern)
 		{
-			D(DBF_Parser, bug("rule id %zu, pattern %s\n", rule->rule_id, to_s(rule->match_pattern).c_str()););
-			std::map<size_t, regexp::match_t>::iterator it = match_cache.find(rule->rule_id);
-			if(it != match_cache.end())
-			{
-				if(it->second)
-					res.insert((ranked_match_t){ rule, it->second, ++rank });
-			}
-			else
-			{
-				regexp::match_t const& match = regexp::search(fix_anchor(rule->match_pattern, anchor, i, firstLine), first, last, first + i);
-				if(!pattern_is_anchored(to_s(rule->match_pattern)))
-					match_cache.insert(std::make_pair(rule->rule_id, match));
-				if(match)
-					res.insert((ranked_match_t){ rule, match, ++rank });
-			}
+			rule->included = true;
+			res.push_back(rule);
 		}
 		else if(!rule->children.empty())
 		{
-			rank = collect_children(base, first, last, anchor, i, firstLine, rule->children, res, match_cache, unique, rank);
+			if(groups)
+			{
+				rule->included = true;
+				groups->push_back(rule);
+			}
+
+			collect_children(rule->children, res, groups);
 		}
-		return rank;
 	}
 
-	static size_t collect_children (rule_ptr const& base, char const* first, char const* last, size_t anchor, size_t i, bool firstLine, std::vector<rule_ptr> const& children, std::set<ranked_match_t>& res, std::map<size_t, regexp::match_t>& match_cache, std::set<size_t>& unique, size_t rank)
+	static void collect_children (std::vector<rule_ptr> const& children, std::vector<rule_t*>& res, std::vector<rule_t*>* groups)
 	{
-		iterate(it, children)
-			rank = collect_rule(base, first, last, anchor, i, firstLine, *it, res, match_cache, unique, rank);
-		return rank;
+		for(rule_ptr const& rule : children)
+			collect_rule(rule.get(), res, groups);
 	}
 
-	static size_t collect_injections (rule_ptr const& base, char const* first, char const* last, stack_ptr const& stack, size_t i, bool firstLine, std::set<ranked_match_t>& res, std::map<size_t, regexp::match_t>& match_cache, std::set<size_t>& unique, size_t rank, scope::context_t const& scope)
+	static void collect_injections (stack_ptr const& stack, scope::context_t const& scope, std::vector<rule_t*> const& groups, std::vector<rule_t*>& res)
 	{
 		for(stack_ptr node = stack; node; node = node->parent)
 		{
-			if(!node->rule->injections)
-				continue;
-
-			iterate(it, *node->rule->injections)
+			for(auto const& pair : node->rule->injections)
 			{
-				if(scope::selector_t(it->first).does_match(scope))
-					rank = collect_rule(base, first, last, stack->anchor, i, firstLine, it->second, res, match_cache, unique, rank);
+				if(pair.first.does_match(scope))
+					collect_rule(pair.second.get(), res, nullptr);
 			}
 		}
 
-		citerate(it, injected_grammars())
+		for(rule_t const* rule : groups)
 		{
-			if(it->first.does_match(scope))
-				rank = collect_children(base, first, last, stack->anchor, i, firstLine, it->second->children, res, match_cache, unique, rank);
+			if(rule->is_root) // already handled via the stack
+				continue;
+
+			for(auto const& pair : rule->injections)
+			{
+				if(pair.first.does_match(scope))
+					collect_rule(pair.second.get(), res, nullptr);
+			}
+		}
+	}
+
+	static size_t apply_rules (size_t rank, std::vector<rule_t*> const& rules, char const* first, char const* last, OnigOptionType options, size_t i, std::set<ranked_match_t>& res, std::map<size_t, regexp::match_t>& match_cache)
+	{
+		for(rule_t* rule : rules)
+		{
+			rule->included = false;
+
+			auto it = match_cache.find(rule->rule_id);
+			if(it != match_cache.end())
+			{
+				if(it->second)
+					res.emplace(rule, it->second, ++rank);
+			}
+			else
+			{
+				auto match = regexp::search(rule->match_pattern, first, last, first + i, last, options);
+				if(!rule->match_pattern_is_anchored)
+					match_cache.emplace(rule->rule_id, match);
+				if(match)
+					res.emplace(rule, match, ++rank);
+			}
 		}
 		return rank;
 	}
 
-	static void collect_rules (rule_ptr const& base, char const* first, char const* last, size_t i, bool firstLine, stack_ptr const& stack, std::set<ranked_match_t>& res, std::map<size_t, regexp::match_t>& match_cache)
+	static void collect_rules (char const* first, char const* last, size_t i, bool firstLine, stack_ptr const& stack, std::set<ranked_match_t>& res, std::map<size_t, regexp::match_t>& match_cache)
 	{
+		std::vector<rule_t*> rules, groups, injectedRulesPre, injectedRulesPost;
+		collect_children(stack->rule->children, rules, &groups);
+		collect_injections(stack, scope::context_t(stack->scope, ""), groups, injectedRulesPre);
+		collect_injections(stack, scope::context_t("", stack->scope), groups, injectedRulesPost);
+
+		for(rule_t* rule : groups)
+			rule->included = false;
+
+		// ============================
+		// = Match rules against text =
+		// ============================
+
 		res.clear();
+		OnigOptionType const options = anchor_options(firstLine, stack->anchor == i, first, last);
+
+		size_t rank = apply_rules(0, injectedRulesPre, first, last, options, i, res, match_cache);
+		size_t endPatternRank = ++rank;
+		rank = apply_rules(rank, rules, first, last, options, i, res, match_cache);
 
 		if(stack->end_pattern)
 		{
 			D(DBF_Parser, bug("end pattern: %s\n", to_s(stack->end_pattern).c_str()););
-			if(regexp::match_t const& match = regexp::search(fix_anchor(stack->end_pattern, stack->anchor, i, firstLine), first, last, first + i))
-				res.insert((ranked_match_t){ stack->rule, match, stack->apply_end_last ? SIZE_T_MAX : 0 });
+			if(regexp::match_t const& match = regexp::search(stack->end_pattern, first, last, first + i, last, options))
+				res.emplace(stack->rule, match, stack->apply_end_last ? ++rank : endPatternRank, true);
 		}
 
-		std::set<size_t> unique;
-		size_t rank = 0;
-		rank = collect_injections(base, first, last, stack, i, firstLine, res, match_cache, unique, rank, scope::context_t(stack->scope, ""));
-		rank = collect_children(base, first, last, stack->anchor, i, firstLine, stack->rule->children, res, match_cache, unique, rank);
-		rank = collect_injections(base, first, last, stack, i, firstLine, res, match_cache, unique, rank, scope::context_t("", stack->scope));
+		rank = apply_rules(rank, injectedRulesPost, first, last, options, i, res, match_cache);
 	}
 
 	static bool has_cycle (size_t rule_id, size_t i, stack_ptr const& stack)
@@ -343,7 +360,7 @@ namespace parse
 		return stack->parent ? has_cycle(rule_id, i, stack->parent) : false;
 	}
 
-	stack_ptr parse (char const* first, char const* last, stack_ptr stack, std::map<size_t, scope::scope_t>& scopes, bool firstLine, size_t i)
+	static stack_ptr parse (char const* first, char const* last, stack_ptr stack, scopes_t& scopes, bool firstLine, size_t i)
 	{
 		D(DBF_Parser_Flow, bug("%.*s", (int)(last - first), first););
 
@@ -353,9 +370,15 @@ namespace parse
 
 		std::vector<stack_ptr> while_rules;
 		for(stack_ptr node = stack; node->while_pattern; node = node->parent)
+		{
 			while_rules.push_back(node);
+			if(node->scope_string != NULL_STR)
+				scopes.remove(i, node->scope_string, true);
+			if(node->content_scope_string != NULL_STR)
+				scopes.remove(i, node->content_scope_string, true);
+		}
 
-		scope::scope_t scope = scopes[i] = while_rules.empty() ? stack->scope : while_rules.back()->parent->scope;
+		scope::scope_t scope = while_rules.empty() ? stack->scope : while_rules.back()->parent->scope;
 		D(DBF_Parser, bug("%s, offset %zu, %zu while rules\n", to_s(scope).c_str(), i, while_rules.size()););
 		riterate(it, while_rules)
 		{
@@ -363,12 +386,22 @@ namespace parse
 			{
 				D(DBF_Parser_Flow, bug("while match %zu-%zu\n", m.begin(), m.end()););
 
-				rule_ptr const& rule = (*it)->rule;
+				rule_t const* rule = (*it)->rule;
 				if(rule->scope_string != NULL_STR)
-					scope = scopes[m.begin()] = create_scope(scope, rule->scope_string, m);
+				{
+					std::string const scopeString = expand(rule->scope_string, m);
+					scope.push_scope(scopeString);
+					scopes.add(m.begin(), scopeString);
+				}
+
 				apply_captures(scope, m, rule->while_captures ?: rule->captures, scopes, firstLine);
+
 				if(rule->content_scope_string != NULL_STR)
-					scope = scopes[m.end()] = create_scope(scope, rule->content_scope_string, m);
+				{
+					std::string const scopeString = expand(rule->content_scope_string, m);
+					scope.push_scope(scopeString);
+					scopes.add(m.end(), scopeString);
+				}
 
 				stack->anchor = i = m.end();
 				continue;
@@ -384,13 +417,9 @@ namespace parse
 		// = Parse rest of line =
 		// ======================
 
-		rule_ptr base = stack->rule;
-		for(stack_ptr node = stack; node; node = node->parent)
-			base = node->rule;
-
 		std::set<ranked_match_t> rules;
 		std::map<size_t, regexp::match_t> match_cache;
-		collect_rules(base, first, last, i, firstLine, stack, rules, match_cache);
+		collect_rules(first, last, i, firstLine, stack, rules, match_cache);
 
 		D(DBF_Parser, bug("%zu rules (out of %zu), parse: %.*s", rules.size(), stack->rule->children.size(), (int)(last - first - i), first + i););
 		while(!rules.empty())
@@ -406,8 +435,8 @@ namespace parse
 
 			if(m.match.begin() < i)
 			{
-				regexp::pattern_t const& ptrn = m.rank == 0 || m.rank == SIZE_T_MAX ? stack->end_pattern : m.rule->match_pattern;
-				if(m.match = regexp::search(fix_anchor(ptrn, stack->anchor, i, firstLine), first, last, first + i))
+				regexp::pattern_t const& ptrn = m.is_end_pattern ? stack->end_pattern : m.rule->match_pattern;
+				if(m.match = regexp::search(ptrn, first, last, first + i, last, anchor_options(firstLine, stack->anchor == i, first, last)))
 					rules.insert(m);
 				continue;
 			}
@@ -415,18 +444,19 @@ namespace parse
 			i = m.match.end();
 			D(DBF_Parser_Flow, bug("match %2zu-%2zu: %s\n", m.match.begin(), m.match.end(), m.rule->scope_string != NULL_STR ? m.rule->scope_string.c_str() : "(untitled)"););
 
-			rule_ptr const& rule = m.rule;
-			if(m.rank == 0 || m.rank == SIZE_T_MAX) // end-part of rule
+			rule_t const* rule = m.rule;
+			if(m.is_end_pattern)
 			{
-				scope = stack->scope;
-				if(stack->rule->content_scope_string != NULL_STR)
-					scope = scopes[m.match.begin()] = scope.parent();
+				if(stack->content_scope_string != NULL_STR)
+					scopes.remove(m.match.begin(), stack->content_scope_string, true);
 				apply_captures(scope, m.match, rule->end_captures ?: rule->captures, scopes, firstLine);
+				if(stack->scope_string != NULL_STR)
+					scopes.remove(m.match.end(), stack->scope_string, true);
 
 				bool nothingMatched = stack->zw_begin_match && stack->anchor == i;
 
 				stack = stack->parent;
-				scope = scopes[m.match.end()] = stack->scope;
+				scope = stack->scope;
 				D(DBF_Parser_Flow, bug("leaving, new scope %s\n", to_s(scope).c_str()););
 
 				if(nothingMatched) // we left a begin/end rule but haven’t parsed any bytes, so we’re destined to repeat this mistake
@@ -443,13 +473,25 @@ namespace parse
 					break;
 				}
 
-				if(rule->scope_string != NULL_STR)
-					scope = scopes[m.match.begin()] = create_scope(scope, rule->scope_string, m.match);
-				apply_captures(scope, m.match, rule->begin_captures ?: rule->captures, scopes, firstLine);
-				if(rule->content_scope_string != NULL_STR)
-					scope = scopes[m.match.end()] = create_scope(scope, rule->content_scope_string, m.match);
+				stack = std::make_shared<stack_t>(rule, scope::scope_t(), stack);
 
-				stack.reset(new stack_t(rule, scope, stack));
+				if(rule->scope_string != NULL_STR)
+				{
+					stack->scope_string = expand(rule->scope_string, m.match);
+					scope.push_scope(stack->scope_string);
+					scopes.add(m.match.begin(), stack->scope_string);
+				}
+
+				apply_captures(scope, m.match, rule->begin_captures ?: rule->captures, scopes, firstLine);
+
+				if(rule->content_scope_string != NULL_STR)
+				{
+					stack->content_scope_string = expand(rule->content_scope_string, m.match);
+					scope.push_scope(stack->content_scope_string);
+					scopes.add(m.match.end(), stack->content_scope_string);
+				}
+
+				stack->scope          = scope;
 				stack->while_pattern  = rule->while_pattern;
 				stack->end_pattern    = rule->end_pattern;
 				stack->apply_end_last = rule->apply_end_last == "1";
@@ -474,28 +516,33 @@ namespace parse
 
 				if(rule->scope_string != NULL_STR)
 				{
-					scope::scope_t const& newScope = create_scope(scope, rule->scope_string, m.match);
-					scopes[m.match.begin()] = newScope;
-					apply_captures(newScope, m.match, rule->captures, scopes, firstLine);
+					std::string const scopeString = expand(rule->scope_string, m.match);
+					scopes.add(m.match.begin(), scopeString);
+					scopes.remove(m.match.end(), scopeString);
 				}
-				else
-				{
-					apply_captures(scope, m.match, rule->captures, scopes, firstLine);
-				}
-				scopes[m.match.end()] = scope;
 
-				if(m.match = regexp::search(fix_anchor(m.rule->match_pattern, stack->anchor, i, firstLine), first, last, first + i))
+				apply_captures(scope, m.match, rule->captures, scopes, firstLine);
+
+				if(m.match = regexp::search(m.rule->match_pattern, first, last, first + i, last, anchor_options(firstLine, stack->anchor == i, first, last)))
 					rules.insert(m);
 
 				continue; // no context change, so skip finding rules for this context
 			}
 
 			D(DBF_Parser, bug("%zu rules before collecting\n", rules.size()););
-			collect_rules(base, first, last, i, firstLine, stack, rules, match_cache);
+			collect_rules(first, last, i, firstLine, stack, rules, match_cache);
 			D(DBF_Parser, bug("%zu rules after collecting\n", rules.size()););
 		}
 		D(DBF_Parser_Flow, bug("line done (%zu rules)\n", rules.size()););
 		stack->anchor = first + stack->anchor == last ? 0 : SIZE_T_MAX;
 		return stack;
+	}
+
+	stack_ptr parse (char const* first, char const* last, stack_ptr stack, std::map<size_t, scope::scope_t>& map, bool firstLine)
+	{
+		scopes_t scopes;
+		auto res = parse(first, last, stack, scopes, firstLine, 0);
+		res->scope = scopes.update(stack->scope, map);
+		return res;
 	}
 }

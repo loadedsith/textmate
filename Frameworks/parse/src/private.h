@@ -44,29 +44,41 @@ namespace parse
 		repository_ptr while_captures;
 		repository_ptr end_captures;
 		repository_ptr repository;
-		repository_ptr injections;
+		repository_ptr injection_rules;
+		std::vector<std::pair<scope::selector_t, rule_ptr>> injections;
 
 		// =======================
 		// = Pre-parsed versions =
 		// =======================
 
-		rule_weak_ptr include;
+		rule_t* include = nullptr;
 
 		regexp::pattern_t match_pattern;
 		regexp::pattern_t while_pattern;
 		regexp::pattern_t end_pattern;
+		bool match_pattern_is_anchored = false;
+
+		// =================
+		// = Mutable State =
+		// =================
+
+		bool included = false;
+		bool is_root = false;
 	};
 
 	struct stack_t
 	{
 		WATCH_LEAKS(stack_t);
 
-		stack_t (rule_ptr const& rule, scope::scope_t const& scope, stack_ptr const& parent = stack_ptr()) : parent(parent), rule(rule), scope(scope), anchor(0) { }
+		stack_t (rule_t const* rule, scope::scope_t const& scope, stack_ptr const& parent = stack_ptr()) : parent(parent), rule(rule), scope(scope), anchor(0) { }
 
 		stack_ptr parent;
 
-		rule_ptr rule;                      // the rule supplying patterns for current context
+		rule_t const* rule;                 // the rule supplying patterns for current context
 		scope::scope_t scope;               // the scope of the current context
+
+		std::string scope_string = NULL_STR;         // expanded version of rule->scope_string
+		std::string content_scope_string = NULL_STR; // expanded version of rule->content_scope_string
 
 		regexp::pattern_t while_pattern;    // a while-pattern active in current context
 		regexp::pattern_t end_pattern;      // the end-pattern which exits this context
@@ -77,8 +89,6 @@ namespace parse
 		bool operator== (stack_t const& rhs) const;
 		bool operator!= (stack_t const& rhs) const;
 	};
-
-	std::vector< std::pair<scope::selector_t, rule_ptr> >& injected_grammars ();
 
 } /* parse */
 

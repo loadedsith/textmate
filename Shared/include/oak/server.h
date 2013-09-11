@@ -38,6 +38,7 @@ namespace oak
 		cf::callback_ptr run_loop_source;
 		std::vector< std::pair<size_t, ARG> > requests;
 		std::vector< std::pair<size_t, RESULT>  > results;
+		std::mutex client_lock;
 		pthread_mutex_t requests_mutex;
 		pthread_mutex_t results_mutex;
 		pthread_cond_t cond;
@@ -90,13 +91,15 @@ namespace oak
 	template <typename T, typename ARG, typename RESULT>
 	size_t server_t<T, ARG, RESULT>::register_client (T* callback)
 	{
-		client_to_callback.insert(std::make_pair(next_client_key, callback));
+		std::lock_guard<std::mutex> lock(client_lock);
+		client_to_callback.emplace(next_client_key, callback);
 		return next_client_key++;
 	}
 
 	template <typename T, typename ARG, typename RESULT>
 	void server_t<T, ARG, RESULT>::unregister_client (size_t clientKey)
 	{
+		std::lock_guard<std::mutex> lock(client_lock);
 		client_to_callback.erase(client_to_callback.find(clientKey));
 		remove_requests(clientKey);
 	}
@@ -156,11 +159,17 @@ namespace oak
 		results.swap(offload);
 		pthread_mutex_unlock(&results_mutex);
 
+		std::lock_guard<std::mutex> lock(client_lock);
 		iterate(it, offload)
 		{
 			typename std::map<size_t, T*>::iterator client = client_to_callback.find(it->first);
 			if(client != client_to_callback.end())
-				client->second->handle_reply(it->second);
+			{
+				T* obj = client->second;
+				client_lock.unlock();
+				obj->handle_reply(it->second);
+				client_lock.lock();
+			}
 		}
 	}
 

@@ -10,15 +10,14 @@ OAK_DEBUG_VAR(HTMLOutputWindow);
 static std::multimap<oak::uuid_t, HTMLOutputWindowController*> Windows;
 
 @interface HTMLOutputWindowController ()
+{
+	command::runner_ptr runner;
+}
 @property (nonatomic, retain) OakHTMLOutputView* htmlOutputView;
 @property (nonatomic, readonly) BOOL running;
 @end
 
 @implementation HTMLOutputWindowController
-{
-	command::runner_ptr runner;
-}
-
 - (id)initWithRunner:(command::runner_ptr const&)aRunner
 {
 	if(self = [super init])
@@ -68,7 +67,7 @@ static std::multimap<oak::uuid_t, HTMLOutputWindowController*> Windows;
 		Windows.erase(runner->uuid());
 
 	runner = aRunner;
-	Windows.insert(std::make_pair(runner->uuid(), self));
+	Windows.emplace(runner->uuid(), self);
 
 	self.window.title = [NSString stringWithCxxString:runner->name()];
 
@@ -122,5 +121,17 @@ static std::multimap<oak::uuid_t, HTMLOutputWindowController*> Windows;
 - (void)dealloc
 {
 	self.window.delegate = nil;
+}
+
+- (IBAction)toggleHTMLOutput:(id)sender
+{
+	[self.window performClose:self];
+}
+
+- (BOOL)validateMenuItem:(NSMenuItem*)menuItem
+{
+	if([menuItem action] == @selector(toggleHTMLOutput:))
+		[menuItem setTitle:@"Hide HTML Output"];
+	return YES;
 }
 @end

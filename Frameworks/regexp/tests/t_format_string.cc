@@ -10,6 +10,25 @@ void test_format_string ()
 	OAK_ASSERT_EQ(replace("æbleGRØD", ".+", "»${0:/capitalize/asciify}«"), "»AEblegrod«");
 }
 
+void test_variables ()
+{
+	std::map<std::string, std::string> variables{
+		{ "a",    "hello"         },
+		{ "b",    " "             },
+		{ "c",    "world"         },
+		{ "d",    "hell"          },
+		{ "dir",  "/path/to"      },
+		{ "path", "/path/to/file" },
+	};
+	OAK_ASSERT_EQ("hello world", format_string::expand("$a$b$c",                  variables));
+	OAK_ASSERT_EQ("hello world", format_string::expand("${a}${b}${c}",            variables));
+	OAK_ASSERT_EQ("hi world",    format_string::expand("${a/hello/hi/}${b}${c}",  variables));
+	OAK_ASSERT_EQ("hi’yo world", format_string::expand("${a/${d}/hi’y/}${b}${c}", variables));
+	OAK_ASSERT_EQ("file",        format_string::expand("${path/^.*\\///}",        variables));
+	OAK_ASSERT_EQ("file",        format_string::expand("${path/${dir}.//}",       variables));
+	OAK_ASSERT_EQ("file",        format_string::expand("${path/${dir}\\///}",     variables));
+}
+
 void test_legacy_conditions ()
 {
 	using format_string::replace;
@@ -34,4 +53,18 @@ void test_escape_format_string ()
 	OAK_ASSERT_EQ(expand(escape("(?bla)")),                "(?bla)");
 	OAK_ASSERT_EQ(expand(escape("Escape\\\\me")),    "Escape\\\\me");
 	OAK_ASSERT_EQ(expand(escape("(?1:baz: buz)")),  "(?1:baz: buz)");
+}
+
+void test_control_codes ()
+{
+	using format_string::expand;
+	OAK_ASSERT_EQ("\t",         expand("\\t"));
+	OAK_ASSERT_EQ("\r",         expand("\\r"));
+	OAK_ASSERT_EQ("\n",         expand("\\n"));
+	OAK_ASSERT_EQ("\\x",        expand("\\x"));
+	OAK_ASSERT_EQ("\\x{foo}",   expand("\\x{foo}"));
+	OAK_ASSERT_EQ("\u2014",     expand("\\x{2014}"));
+	OAK_ASSERT_EQ("\U00020EF5", expand("\\x{20EF5}"));
+	OAK_ASSERT_EQ("\U0010FFFF", expand("\\x{0010FFFF}"));
+	OAK_ASSERT_EQ("Æblegrød",   expand("\\xc3\\x86blegr\\xC3\\xB8d"));
 }

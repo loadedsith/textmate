@@ -107,16 +107,15 @@ namespace ng
 		{
 			case kNodeTypeText:
 			{
-				_line.reset(new ct::line_t(buffer.substr(bufferOffset, bufferOffset + _length), buffer.scopes(bufferOffset, bufferOffset + _length), theme, NULL));
+				_line = std::make_shared<ct::line_t>(buffer.substr(bufferOffset, bufferOffset + _length), buffer.scopes(bufferOffset, bufferOffset + _length), theme, nullptr);
 			}
 			break;
 
 			case kNodeTypeUnprintable:
 			{
-				std::string str = representation_for(utf8::to_ch(buffer.substr(bufferOffset, bufferOffset + _length)));
-				std::map<size_t, scope::scope_t> scopes;
-				scopes[0] = buffer.scope(bufferOffset).right.append("deco.unprintable");
-				_line.reset(new ct::line_t(str, scopes, theme, NULL));
+				scope::scope_t scope = buffer.scope(bufferOffset).right;
+				scope.push_scope("deco.unprintable");
+				_line = std::make_shared<ct::line_t>(representation_for(utf8::to_ch(buffer.substr(bufferOffset, bufferOffset + _length))), std::map<size_t, scope::scope_t>{ { 0, scope } }, theme, nullptr);
 			}
 			break;
 
@@ -134,9 +133,9 @@ namespace ng
 
 			case kNodeTypeSoftBreak:
 			{
-				std::map<size_t, scope::scope_t> scopes;
-				scopes[0] = buffer.scope(bufferOffset).right.append("deco.indented-wrap");
-				_line.reset(new ct::line_t(fillStr, scopes, theme, NULL));
+				scope::scope_t scope = buffer.scope(bufferOffset).right;
+				scope.push_scope("deco.indented-wrap");
+				_line = std::make_shared<ct::line_t>(fillStr, std::map<size_t, scope::scope_t>{ { 0, scope } }, theme, nullptr);
 			}
 			break;
 		}
@@ -170,9 +169,9 @@ namespace ng
 			scope::scope_t scope = _type == kNodeTypeSoftBreak ? buffer.scope(bufferOffset).left : buffer.scope(bufferOffset).right;
 			switch(_type)
 			{
-				case kNodeTypeUnprintable: scope = scope.append("deco.unprintable");   break;
-				case kNodeTypeFolding:     scope = scope.append("deco.folding");       break;
-				case kNodeTypeSoftBreak:   scope = scope.append("deco.indented-wrap"); break;
+				case kNodeTypeUnprintable: scope.push_scope("deco.unprintable");   break;
+				case kNodeTypeFolding:     scope.push_scope("deco.folding");       break;
+				case kNodeTypeSoftBreak:   scope.push_scope("deco.indented-wrap"); break;
 			}
 
 			styles_t const styles = theme->styles_for_scope(scope);
@@ -198,11 +197,14 @@ namespace ng
 			{
 				case kNodeTypeTab:
 					str = "‣";
-					scope = scope.append("deco.invisible.tab");
+					scope.push_scope("deco.invisible.tab");
 				break;
 				case kNodeTypeNewline:
 					str = "¬";
-					scope = scope.append("deco.invisible.newline");
+					scope.push_scope("deco.invisible.newline");
+				break;
+				case kNodeTypeFolding:
+					scope.push_scope("deco.folding");
 				break;
 			}
 
@@ -214,7 +216,7 @@ namespace ng
 
 			if(_type == kNodeTypeFolding)
 			{
-				styles_t const styles = theme->styles_for_scope(scope.append("deco.folding"));
+				styles_t const styles = theme->styles_for_scope(scope);
 
 				CGFloat x1 = round(anchor.x);
 				CGFloat x2 = round(anchor.x + _width);

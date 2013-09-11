@@ -1,5 +1,6 @@
 #include "transform.h"
 #include "indent.h"
+#include <regexp/regexp.h>
 #include <regexp/format_string.h>
 #include <oak/oak.h>
 #include <oak/server.h>
@@ -70,6 +71,10 @@ namespace transform
 		std::string res("");
 		if(v.size() == 1 || (v.size() == 2 && v.back().first == v.back().second))
 		{
+			static regexp::pattern_t pattern("\\A(?'open'[({\\[])?(?:(?'lhs'\\w+)(?'op'\\W+)(?'rhs'\\w+)|(?'lhs'[^,\\s]+?)(?'op'\\s*,\\s*)(?'rhs'[^,\\s]+?)|(?'lhs'[^:\\s]+?)(?'op'\\s*:\\s*)(?'rhs'[^:\\s]+?)|(?'lhs'[^<>!=\\s]+?)(?'op'\\s*[<>!=]\\s*)(?'rhs'[^<>!=\\s]+?))(?(<open>)(?'close'[\\]})]))\\z");
+			if(regexp::match_t const& m = regexp::search(pattern, src))
+				return format_string::expand("${open}${rhs}${op}${lhs}${close}", m.captures());
+
 			std::deque<char> tmp;
 			citerate(it, diacritics::make_range(src.data(), src.data() + src.size() - (hasNewline ? 1 : 0)))
 				tmp.insert(tmp.begin(), &it, &it + it.length());

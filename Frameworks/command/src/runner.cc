@@ -41,7 +41,7 @@ namespace command
 
 	runner_ptr runner (bundle_command_t const& command, ng::buffer_t const& buffer, ng::ranges_t const& selection, std::map<std::string, std::string> const& environment, delegate_ptr delegate, std::string const& pwd)
 	{
-		return runner_ptr(new runner_t(command, buffer, selection, environment, pwd, delegate));
+		return std::make_shared<runner_t>(command, buffer, selection, environment, pwd, delegate);
 	}
 
 	void runner_t::release ()
@@ -62,7 +62,7 @@ namespace command
 		int inputPipe[2];
 		pipe(inputPipe);
 		fcntl(inputPipe[1], F_SETFD, FD_CLOEXEC);
-		_input_range = _command.input == input::nothing ? text::range_t::undefined : _delegate->write_unit_to_fd(inputPipe[1], _command.input, _command.input_fallback, _command.input_format, _command.scope_selector, _environment, &_input_was_selection);
+		_input_range = _command.input == input::nothing ? (close(inputPipe[1]), text::range_t::undefined) : _delegate->write_unit_to_fd(inputPipe[1], _command.input, _command.input_fallback, _command.input_format, _command.scope_selector, _environment, &_input_was_selection);
 
 		// ----------8<----------
 
@@ -73,8 +73,8 @@ namespace command
 
 		_process.launch();
 
-		_output_reader = my_reader_ptr(new my_reader_t(_process.output_fd, shared_from_this(), false));
-		_error_reader  = my_reader_ptr(new my_reader_t(_process.error_fd, shared_from_this(), true));
+		_output_reader = std::make_shared<my_reader_t>(_process.output_fd, shared_from_this(), false);
+		_error_reader  = std::make_shared<my_reader_t>(_process.error_fd, shared_from_this(), true);
 
 		if(_command.output == output::new_window && _command.output_format == output_format::html)
 		{

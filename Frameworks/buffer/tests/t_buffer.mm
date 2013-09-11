@@ -5,7 +5,7 @@
 
 static bundles::item_ptr TestGrammarItem;
 
-__attribute__((constructor)) static void setup_fixtures ()
+void setup_fixtures ()
 {
 	static std::string TestLanguageGrammar =
 		"{	fileTypes      = ( txt );\n"
@@ -23,6 +23,7 @@ __attribute__((constructor)) static void setup_fixtures ()
 	bundleIndex.commit();
 
 	NSApplicationLoad();
+	[NSSpellChecker sharedSpellChecker];
 }
 
 void benchmark_insert_50_mb ()

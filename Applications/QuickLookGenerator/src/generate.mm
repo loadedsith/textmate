@@ -15,8 +15,6 @@
 
 OAK_EXTERN_C_BEGIN
 
-static plist::dictionary_t prune_dictionary (plist::dictionary_t const& plist) { return plist; }
-
 static void initialize (CFBundleRef generatorBundle)
 {
 	static dispatch_once_t onceToken;
@@ -35,7 +33,7 @@ static void initialize (CFBundleRef generatorBundle)
 			paths.push_back(path::join(path, "Bundles"));
 
 		plist::cache_t cache;
-		cache.load(path::join(path::home(), "Library/Caches/com.macromates.TextMate/BundlesIndex.plist"), &prune_dictionary);
+		cache.load(path::join(path::home(), "Library/Caches/com.macromates.TextMate/BundlesIndex.plist"));
 
 		auto index = create_bundle_index(paths, cache);
 		bundles::set_index(index.first, index.second);
@@ -67,7 +65,7 @@ OSStatus TextMateQuickLookPlugIn_GeneratePreviewForURL (void* instance, QLPrevie
 
 	// Apply appropriate grammar
 	std::string filePath = to_s([[(__bridge NSURL*)url filePathURL] path]);
-	std::string fileType = file::type(filePath, io::bytes_ptr(new io::bytes_t(fileContents.data(), fileContents.size(), false)));
+	std::string fileType = file::type(filePath, std::make_shared<io::bytes_t>(fileContents.data(), fileContents.size(), false));
 	if(fileType != NULL_STR)
 	{
 		for(auto item : bundles::query(bundles::kFieldGrammarScope, fileType, scope::wildcard, bundles::kItemTypeGrammar))

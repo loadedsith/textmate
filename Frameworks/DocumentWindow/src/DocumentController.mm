@@ -22,7 +22,7 @@
 #import <OakFilterList/FileChooser.h>
 #import <OakSystem/application.h>
 #import <Find/Find.h>
-#import <CrashReporter/utility.h>
+#import <crash/info.h>
 #import <file/path_info.h>
 #import <io/entries.h>
 #import <scm/scm.h>
@@ -468,6 +468,9 @@ namespace
 
 - (void)closeTabsAtIndexes:(NSIndexSet*)anIndexSet askToSaveChanges:(BOOL)askToSaveFlag createDocumentIfEmpty:(BOOL)createIfEmptyFlag
 {
+	if([anIndexSet count] == 0 || _documents.empty())
+		return;
+
 	crash_reporter_info_t crashInfo(text::format("close %lu documents with %zu open and index of selected being %zu.", [anIndexSet count], _documents.size(), _selectedTabIndex));
 	crashInfo << to_s([anIndexSet description]);
 
@@ -659,7 +662,7 @@ namespace
 	{
 		auto iter = _trackedDocuments.find(aDocument->identifier());
 		if(iter == _trackedDocuments.end())
-			iter = _trackedDocuments.insert(std::make_pair(aDocument->identifier(), tracking_info_t(self, aDocument))).first;
+			iter = _trackedDocuments.emplace(aDocument->identifier(), tracking_info_t(self, aDocument)).first;
 		iter->second.track();
 	}
 }
@@ -825,7 +828,7 @@ namespace
 			{
 				document::document_ptr doc = newDocuments[i];
 				if(!doc->is_modified() && doc->is_on_disk() && uuids.find(doc->identifier()) == uuids.end() && !doc->sticky())
-					ranked.insert(std::make_pair(doc->lru(), i));
+					ranked.emplace(doc->lru(), i);
 			}
 
 			NSMutableIndexSet* indexSet = [NSMutableIndexSet indexSet];
@@ -1305,7 +1308,7 @@ namespace
 		if(projectPath)
 		{
 			std::map<std::string, std::string> const map = { { "projectDirectory", to_s(projectPath) } };
-			settings_t const settings = settings_for_path(NULL_STR, NULL_STR, to_s(projectPath), map);
+			settings_t const settings = settings_for_path(NULL_STR, scope::scope_t(), to_s(projectPath), map);
 			std::string const userProjectDirectory = settings.get(kSettingsProjectDirectoryKey, NULL_STR);
 			if(path::is_absolute(userProjectDirectory))
 				projectPath = [NSString stringWithCxxString:path::normalize(userProjectDirectory)];
@@ -1753,7 +1756,9 @@ namespace
 
 - (IBAction)toggleHTMLOutput:(id)sender
 {
-	self.htmlOutputVisible = !self.htmlOutputVisible;
+	if(self.htmlOutputVisible && self.htmlOutputInWindow && ![self.htmlOutputWindowController.window isKeyWindow])
+			[self.htmlOutputWindowController.window makeKeyAndOrderFront:self];
+	else	self.htmlOutputVisible = !self.htmlOutputVisible;
 }
 
 - (BOOL)setCommandRunner:(command::runner_ptr const&)aRunner
@@ -2010,7 +2015,7 @@ namespace
 	int i = 0;
 	for(auto document : _documents)
 	{
-		NSMenuItem* item = [aMenu addItemWithTitle:[NSString stringWithCxxString:document->display_name()] action:@selector(takeSelectedTabIndexFrom:) keyEquivalent:i <= 10 ? [NSString stringWithFormat:@"%c", '0' + (i+1) % 10] : @""];
+		NSMenuItem* item = [aMenu addItemWithTitle:[NSString stringWithCxxString:document->display_name()] action:@selector(takeSelectedTabIndexFrom:) keyEquivalent:i < 10 ? [NSString stringWithFormat:@"%c", '0' + ((i+1) % 10)] : @""];
 		item.tag     = i;
 		item.toolTip = [[NSString stringWithCxxString:document->path()] stringByAbbreviatingWithTildeInPath];
 		item.image   = [OakFileIconImage fileIconImageWithPath:[NSString stringWithCxxString:document->path()] isModified:document->is_modified()];
@@ -2036,7 +2041,7 @@ namespace
 		[menuItem setTitle:self.fileBrowserVisible ? @"Hide File Browser" : @"Show File Browser"];
 	else if([menuItem action] == @selector(toggleHTMLOutput:))
 	{
-		[menuItem setTitle:self.htmlOutputVisible ? @"Hide HTML Output" : @"Show HTML Output"];
+		[menuItem setTitle:(!self.htmlOutputVisible || self.htmlOutputInWindow && ![self.htmlOutputWindowController.window isKeyWindow]) ? @"Show HTML Output" : @"Hide HTML Output"];
 		active = !self.htmlOutputInWindow || self.htmlOutputWindowController;
 	}
 	else if([menuItem action] == @selector(newDocumentInDirectory:))
@@ -2408,7 +2413,7 @@ static NSUInteger DisableSessionSavingCount = 0;
 					iterate(parent, parents)
 					{
 						if(path::is_child(*parent, projectPath))
-							candidates.insert(std::make_pair(parent->size() - projectPath.size(), candidate));
+							candidates.emplace(parent->size() - projectPath.size(), candidate);
 					}
 				}
 			}

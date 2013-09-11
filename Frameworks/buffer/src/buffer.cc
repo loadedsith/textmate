@@ -13,9 +13,9 @@ namespace ng
 {
 	buffer_t::buffer_t (char const* str) : _grammar_callback(*this), _revision(0), _next_revision(1), _spelling_language("en")
 	{
-		_symbols.reset(new symbols_t);   _meta_data.push_back(_symbols.get());
-		_marks.reset(new marks_t);       _meta_data.push_back(_marks.get());
-		_pairs.reset(new pairs_t);       _meta_data.push_back(_pairs.get());
+		_meta_data.push_back((_symbols = std::make_shared<symbols_t>()).get());
+		_meta_data.push_back((_marks = std::make_shared<marks_t>()).get());
+		_meta_data.push_back((_pairs = std::make_shared<pairs_t>()).get());
 		_scopes.set(-1, "text");
 
 		if(str)
@@ -174,21 +174,19 @@ namespace ng
 		if(_grammar)
 			_grammar->remove_callback(&_grammar_callback);
 		_grammar.reset();
+		_scopes.clear();
+		_parser_states.clear();
+		_dirty.clear();
 
 		std::string rootScope = NULL_STR;
 		plist::get_key_path(grammarItem->plist(), bundles::kFieldGrammarScope, rootScope);
-		_scopes.clear();
 		_scopes.set(-1, rootScope);
 
 		if(parse::grammar_ptr grammar = parse::parse_grammar(grammarItem))
 		{
 			_grammar = grammar;
 			_grammar->add_callback(&_grammar_callback);
-
-			_parser_states.clear();
 			_parser_states.set(-1, grammar->seed());
-
-			_dirty.clear();
 			_dirty.set(0, true);
 
 			initiate_repair(10);
@@ -221,9 +219,9 @@ namespace ng
 		if(_spelling && includeDynamic)
 		{
 			if(i && _spelling->misspelled_at(i-1))
-				left = left.append("dyn.misspelled");
+				left.push_scope("dyn.misspelled");
 			if(i+i < size() && _spelling->misspelled_at(i))
-				right = right.append("dyn.misspelled");
+				right.push_scope("dyn.misspelled");
 		}
 
 		return scope::context_t(left, right);
@@ -235,50 +233,54 @@ namespace ng
 		std::map<size_t, scope::scope_t> scopes;
 		auto first = _scopes.upper_bound(from);
 		auto last  = _scopes.upper_bound(to);
-		if(first != _scopes.begin())
+		if(first != _scopes.begin() && (first == _scopes.end() || (ssize_t)from < first->first))
 		{
 			auto it = first;
-			scopes[0] = (--it)->second;
+			scopes.emplace(0, (--it)->second);
 		}
-		foreach(it, first, last)
-			scopes[it->first - from] = it->second;
+		std::transform(first, last, std::inserter(scopes, scopes.end()), [&from](std::pair<ssize_t, scope::scope_t> const& pair){
+			return std::make_pair(pair.first - from, pair.second);
+		});
 
-		std::map<size_t, bool> const& m = misspellings(from, to);
+		std::map<size_t, bool> const m = misspellings(from, to);
 
-		std::map<size_t, scope::scope_t>::const_iterator scopeIter = scopes.begin();
-		std::map<size_t, bool>::const_iterator spellingIter = m.begin();
+		auto scopeIter       = scopes.begin();
+		auto spellingIter    = m.begin();
 		scope::scope_t scope = scopeIter->second;
-		bool spelling = false;
+		bool misspelled      = false;
 
-		std::map<size_t, scope::scope_t> res;
-		while(spellingIter != m.end() && scopeIter != scopes.end())
+		while(spellingIter != m.end() || (misspelled && scopeIter != scopes.end()))
 		{
-			if(spellingIter->first < scopeIter->first)
+			if(spellingIter == m.end())
 			{
-				spelling = spellingIter->second;
-				res[spellingIter->first] = spelling ? scope.append("dyn.misspelled") : scope;
-				++spellingIter;
-			}
-			else if(scopeIter->first < spellingIter->first)
-			{
-				scope = scopeIter->second;
-				res[scopeIter->first] = spelling ? scope.append("dyn.misspelled") : scope;
+				scopeIter->second.push_scope("dyn.misspelled");
 				++scopeIter;
+			}
+			else if(scopeIter == scopes.end() || spellingIter->first < scopeIter->first)
+			{
+				if((misspelled = spellingIter->second) && scope.back() != "dyn.misspelled")
+					scope.push_scope("dyn.misspelled");
+				else if(scope.back() == "dyn.misspelled")
+					scope.pop_scope();
+				scopes.emplace(spellingIter->first, scope);
+				++spellingIter;
 			}
 			else
 			{
-				spelling = spellingIter->second;
-				++spellingIter;
+				if(scopeIter->first == spellingIter->first)
+				{
+					misspelled = spellingIter->second;
+					++spellingIter;
+				}
+
+				if(misspelled)
+					scopeIter->second.push_scope("dyn.misspelled");
+				scope = scopeIter->second;
+				++scopeIter;
 			}
 		}
 
-		for(; scopeIter != scopes.end(); ++scopeIter)
-			res[scopeIter->first] = spelling ? scopeIter->second.append("dyn.misspelled") : scopeIter->second;
-
-		for(; spellingIter != m.end(); ++spellingIter)
-			res[spellingIter->first] = spellingIter->second ? scope.append("dyn.misspelled") : scope;
-
-		return res;
+		return scopes;
 	}
 
 	// =============
@@ -295,7 +297,9 @@ namespace ng
 	bool buffer_t::live_spelling () const                                          { return _spelling ? true : false; }
 	std::string const& buffer_t::spelling_language () const                        { return _spelling_language; }
 	std::map<size_t, bool> buffer_t::misspellings (size_t from, size_t to) const   { return _spelling ? _spelling->misspellings(this, from, to) : std::map<size_t, bool>(); }
+	std::pair<size_t, size_t> buffer_t::next_misspelling (size_t from) const       { return _spelling ? _spelling->next_misspelling(from) : std::pair<size_t, size_t>(0, 0); }
 	ns::spelling_tag_t buffer_t::spelling_tag () const                             { return _spelling_tag; }
+	void buffer_t::recheck_spelling (size_t from, size_t to)                       { if(_spelling) _spelling->recheck(this, from, to); }
 
 	void buffer_t::set_live_spelling (bool flag)
 	{

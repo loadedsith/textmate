@@ -163,8 +163,8 @@ gutter_styles_t::~gutter_styles_t ()
 theme_ptr theme_t::copy_with_font_name_and_size (std::string const& fontName, CGFloat fontSize)
 {
 	if(_font_name == fontName && _font_size == fontSize)
-		return theme_ptr(new theme_t::theme_t(*this));
-	return theme_ptr(new theme_t::theme_t(this->_item, fontName, fontSize));
+		return std::make_shared<theme_t::theme_t>(*this);
+	return std::make_shared<theme_t::theme_t>(this->_item, fontName, fontSize);
 }
 
 theme_t::theme_t (bundles::item_ptr const& themeItem, std::string const& fontName, CGFloat fontSize) :_item(themeItem), _font_name(fontName), _font_size(fontSize)
@@ -376,14 +376,14 @@ styles_t const& theme_t::styles_for_scope (scope::scope_t const& scope) const
 		{
 			double rank = 0;
 			if(it->scope_selector.does_match(scope, &rank))
-				ordering.insert(std::make_pair(rank, *it));
+				ordering.emplace(rank, *it);
 		}
 
 		iterate(it, _styles->_styles)
 		{
 			double rank = 0;
 			if(it->scope_selector.does_match(scope, &rank))
-				ordering.insert(std::make_pair(rank, *it));
+				ordering.emplace(rank, *it);
 		}
 
 		decomposed_style_t base(scope::selector_t(), _font_name, _font_size);
@@ -402,8 +402,12 @@ styles_t const& theme_t::styles_for_scope (scope::scope_t const& scope) const
 		CGColorPtr caret      = OakColorCreateFromThemeColor(base.caret,      _styles->_color_space) ?: CGColorPtr(CGColorCreate(_styles->_color_space, (CGFloat[4]){   0,   0,   0,   1 }), CGColorRelease);
 		CGColorPtr selection  = OakColorCreateFromThemeColor(base.selection,  _styles->_color_space) ?: CGColorPtr(CGColorCreate(_styles->_color_space, (CGFloat[4]){ 0.5, 0.5, 0.5,   1 }), CGColorRelease);
 
+
 		styles_t res(foreground, background, caret, selection, font, base.underlined == bool_true, base.misspelled == bool_true, base.foldGuide == bool_true);
-		styles = _cache.insert(std::make_pair(scope, res)).first;
+//		styles = _cache.insert(std::make_pair(scope, res)).first;
+//		styles_t res(foreground, background, caret, selection, font, base.underlined == bool_true, base.misspelled == bool_true);
+		styles = _cache.emplace(scope, res).first;
+
 	}
 	return styles->second;
 }
@@ -497,7 +501,7 @@ theme_t::shared_styles_ptr theme_t::find_shared_styles (bundles::item_ptr const&
 	oak::uuid_t const& uuid = themeItem ? themeItem->uuid() : kEmptyThemeUUID;
 	auto theme = Cache.find(uuid);
 	if(theme == Cache.end())
-		theme = Cache.insert(std::make_pair(uuid, shared_styles_ptr(new shared_styles_t(themeItem)))).first;
+		theme = Cache.emplace(uuid, std::make_shared<shared_styles_t>(themeItem)).first;
 	return theme->second;
 }
 
@@ -513,6 +517,6 @@ theme_ptr parse_theme (bundles::item_ptr const& themeItem)
 	oak::uuid_t const& uuid = themeItem ? themeItem->uuid() : kEmptyThemeUUID;
 	auto theme = Cache.find(uuid);
 	if(theme == Cache.end())
-		theme = Cache.insert(std::make_pair(uuid, theme_ptr(new theme_t(themeItem)))).first;
+		theme = Cache.emplace(uuid, std::make_shared<theme_t>(themeItem)).first;
 	return theme->second;
 }

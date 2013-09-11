@@ -3,118 +3,110 @@
 #include "scope.h"
 #include <oak/oak.h>
 
-struct dummy_t
-{
-	dummy_t (char const* f) : f(f) { fprintf(stderr, "%s\n", f); }
-	~dummy_t ()                    { fprintf(stderr, "~%s\n", f); }
-	char const* f;
-};
-
-// #define ENTER dummy_t _dummy(__FUNCTION__)
-#define ENTER
-
 namespace scope
 {
 	namespace types
 	{
-		bool prefix_match (std::vector<scope::types::atom_t> const& lhs, std::vector<scope::types::atom_t> const& rhs)
+		static bool prefix_match (char const* lhs, char const* rhs)
 		{
-			ENTER;
-			if(lhs.size() > rhs.size())
-				return false;
-
-			for(size_t i = 0; i < lhs.size(); ++i)
+			while(*lhs && *rhs)
 			{
-				assert(i < lhs.size()); assert(i < rhs.size());
-				if(lhs[i] != rhs[i] && lhs[i] != atom_any)
+				if(*lhs == *rhs)
+				{
+					++lhs;
+					++rhs;
+				}
+				else if(*lhs == '*')
+				{
+					++lhs;
+					while(*rhs && *rhs != '.')
+						++rhs;
+				}
+				else
+				{
 					return false;
+				}
 			}
-
-			return true;
+			return *lhs == '\0' && (*rhs == '\0' || *rhs == '.');
 		}
 
-		bool path_t::does_match (path_t const& lhs, path_t const& path, double* rank) const
+		bool path_t::does_match (scope::scope_t const& unused, scope::scope_t const& scope, double* rank) const
 		{
-			ENTER;
-			//printf("scope selector:%s\n", this->to_s().c_str());
-			size_t i = path.scopes.size(); // “source.ruby string.quoted.double constant.character”
-			bool anchor_to_bol = this->anchor_to_bol;
-			if(anchor_to_eol)
-			{
-				while(i && !path.scopes[i-1].content_scope)
-					--i;
-			}
-			const size_t size_i = i;
-			size_t j = scopes.size();      // “string > constant $”
-			const size_t size_j = j;
-			
-			bool anchor_to_eol = this->anchor_to_eol;
-			//printf("scope selector: anchor_to_bol:%s anchor_to_eol:%s\n", anchor_to_bol?"yes":"no", anchor_to_eol?"yes":"no");
-			
-			bool check_next = false;
-			size_t reset_i, reset_j;
-			double reset_score = 0;
+			auto node    = scope.node;
+			auto sel     = this->scopes.rbegin();
 			double score = 0;
+
+			decltype(node) btNode = nullptr;
+			auto btSelector = this->scopes.rend();
+			double btScore  = 0;
+
 			double power = 0;
-			while(j <= i && j)
+
+			if(this->anchor_to_eol)
 			{
-				assert(i); assert(j);
-				assert(i-1 < path.scopes.size());
-				assert(j-1 < scopes.size());
-
-				bool anchor_to_previous = scopes[j-1].anchor_to_previous;
-				//printf("scope selector:%s anchor_to_previous:%s check_next:%s\n", types::to_s(scopes[j-1]).c_str(), anchor_to_previous?"yes":"no", check_next?"yes":"no");
-				
-				if((anchor_to_previous || (anchor_to_bol && j == 1)) && !check_next)
+				while(node && node->is_auxiliary_scope())
 				{
-					reset_score = score;
-					reset_i = i;
-					reset_j = j;
+					if(rank)
+						power += node->number_of_atoms();
+					node = node->parent();
 				}
-
-				power += path.scopes[i-1].atoms.size();
-				if(prefix_match(scopes[j-1].atoms, path.scopes[i-1].atoms))
-				{
-					for(size_t k = 0; k < scopes[j-1].atoms.size(); ++k)
-						score += 1 / exp2(power - k);
-					--j;
-					check_next = anchor_to_previous;
-				}
-				else if(check_next)
-				{
-					i = reset_i;
-					j = reset_j;
-					score = reset_score;
-					check_next = false;
-				}
-				--i;
-				// if the outer loop has run once but the inner one has not, it is not an anchor to eol
-				if(anchor_to_eol)
-				{
-					//printf("anchor_to_eol: i:%zd size_i:%zd j:%zd size_j:%zd\n",i,size_i,j,size_j);
-					if(i != size_i && j == size_j)
-						break;
-					else
-						anchor_to_eol = false;
-				}
-				
-				
-				if(anchor_to_bol && j == 0 && i != 0) {
-					i = reset_i - 1;
-					j = reset_j;
-					score = reset_score;
-					check_next = false;
-				}
-				
+				btSelector = sel;
 			}
-			if(j == 0 && rank)
-				*rank = score;
-			return j == 0;
+
+			while(node && sel != this->scopes.rend())
+			{
+				if(rank)
+					power += node->number_of_atoms();
+
+				bool isRedundantNonBOLMatch = this->anchor_to_bol && node->parent() && sel+1 == this->scopes.rend();
+				if(!isRedundantNonBOLMatch && prefix_match(sel->atoms.c_str(), node->c_str()))
+				{
+					if(sel->anchor_to_previous)
+					{
+						if(btSelector == this->scopes.rend())
+						{
+							btNode     = node;
+							btSelector = sel;
+							btScore    = score;
+						}
+					}
+					else if(btSelector != this->scopes.rend())
+					{
+						btSelector = this->scopes.rend();
+					}
+
+					if(rank)
+					{
+						size_t len = std::count(sel->atoms.begin(), sel->atoms.end(), '.') + 1;
+						while(len-- != 0)
+							score += 1 / exp2(power - len);
+					}
+
+					++sel;
+				}
+				else if(btSelector != this->scopes.rend())
+				{
+					if(!btNode)
+						break;
+
+					node  = btNode;
+					sel   = btSelector;
+					score = btScore;
+
+					btSelector = this->scopes.rend();
+				}
+
+				node = node->parent();
+			}
+
+			if(rank)
+				*rank = sel == this->scopes.rend() ? score : 0;
+
+			return sel == this->scopes.rend();
 		}
 
-		bool composite_t::does_match (path_t const& lhs, path_t const& rhs, double* rank) const
+		bool composite_t::does_match (scope::scope_t const& lhs, scope::scope_t const& rhs, double* rank) const
 		{
-			ENTER;
 			bool res = false;
 			if(rank)
 			{
@@ -170,9 +162,8 @@ namespace scope
 			return res;
 		}
 
-		bool selector_t::does_match (path_t const& lhs, path_t const& rhs, double* rank) const
+		bool selector_t::does_match (scope::scope_t const& lhs, scope::scope_t const& rhs, double* rank) const
 		{
-			ENTER;
 			if(rank)
 			{
 				bool res = false;
@@ -198,15 +189,13 @@ namespace scope
 			return false;
 		}
 
-		bool group_t::does_match (path_t const& lhs, path_t const& rhs, double* rank) const
+		bool group_t::does_match (scope::scope_t const& lhs, scope::scope_t const& rhs, double* rank) const
 		{
-			ENTER;
 			return selector.does_match(lhs, rhs, rank);
 		}
 
-		bool filter_t::does_match (path_t const& lhs, path_t const& rhs, double* rank) const
+		bool filter_t::does_match (scope::scope_t const& lhs, scope::scope_t const& rhs, double* rank) const
 		{
-			ENTER;
 			if(filter == both && rank)
 			{
 				double r1, r2;

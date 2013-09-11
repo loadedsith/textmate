@@ -113,7 +113,7 @@ namespace bundles_db
 				plist::get_key_path(source->second, "rank",     rank);
 				plist::get_key_path(source->second, "disabled", disabled);
 
-				res.push_back(source_ptr(new source_t(name, source->first, url, path::join(sources_path(installDir), source->first), rank, disabled)));
+				res.push_back(std::make_shared<source_t>(name, source->first, url, path::join(sources_path(installDir), source->first), rank, disabled));
 			}
 		}
 
@@ -253,7 +253,7 @@ namespace bundles_db
 	{
 		iterate(grammar, grammars)
 		{
-			grammar_info_ptr info(new grammar_info_t);
+			auto info = std::make_shared<grammar_info_t>();
 
 			plist::get_key_path(*grammar, "name", info->_name);
 			plist::get_key_path(*grammar, "scope", info->_scope);
@@ -281,7 +281,7 @@ namespace bundles_db
 	{
 		iterate(dependency, dependencies)
 		{
-			dependency_info_ptr info(new dependency_info_t);
+			auto info = std::make_shared<dependency_info_t>();
 			plist::get_key_path(*dependency, "uuid", info->_uuid);
 			plist::get_key_path(*dependency, "name", info->_name);
 			plist::get_key_path(*dependency, "grammar", info->_grammar);
@@ -301,7 +301,7 @@ namespace bundles_db
 
 			citerate(item, plist::as_array(pair->second))
 			{
-				bundle_ptr bundle(new bundle_t);
+				auto bundle = std::make_shared<bundle_t>();
 				bundle->_source = src;
 
 				if(!plist::get_key_path(*item, "uuid", bundle->_uuid))
@@ -390,7 +390,7 @@ namespace bundles_db
 
 			citerate(item, plist::as_array(pair->second))
 			{
-				bundle_ptr bundle(new bundle_t);
+				auto bundle = std::make_shared<bundle_t>();
 				if(!plist::get_key_path(*item, "category", bundle->_category))
 					bundle->_category = "Discontinued";
 				if(plist::get_key_path(*item, "source", bundle->_origin) && plist::get_key_path(*item, "name", bundle->_name) && plist::get_key_path(*item, "uuid", bundle->_uuid) && plist::get_key_path(*item, "updated", bundle->_path_updated) && plist::get_key_path(*item, "path", bundle->_path))
@@ -405,7 +405,7 @@ namespace bundles_db
 
 		iterate(path, onDiskButNotIndex)
 		{
-			bundle_ptr bundle(new bundle_t);
+			auto bundle = std::make_shared<bundle_t>();
 			bundle->_category     = "Orphaned";
 			bundle->_path         = *path;
 			bundle->_path_updated = path::get_attr(*path, kBundleAttributeUpdated);
@@ -437,7 +437,7 @@ namespace bundles_db
 
 		std::map<oak::uuid_t, bundle_ptr> bundles;
 		iterate(bundle, bundlesByRank)
-			bundles.insert(std::make_pair((*bundle)->uuid(), *bundle));
+			bundles.emplace((*bundle)->uuid(), *bundle);
 
 		citerate(bundle, bundle_t::local_bundles(installDir))
 		{
@@ -451,7 +451,7 @@ namespace bundles_db
 			}
 			else
 			{
-				bundles.insert(std::make_pair((*bundle)->uuid(), (*bundle)));
+				bundles.emplace((*bundle)->uuid(), (*bundle));
 				fprintf(stderr, "Bundle missing in remote index: ‘%s’ (source ‘%s’)\n", (*bundle)->name().c_str(), (*bundle)->origin().c_str());
 			}
 		}
@@ -485,7 +485,7 @@ namespace bundles_db
 
 			plist::dictionary_t::iterator array = plist.find("bundles");
 			if(array == plist.end())
-				array = plist.insert(std::make_pair("bundles", plist::array_t())).first;
+				array = plist.emplace("bundles", plist::array_t()).first;
 			boost::get<plist::array_t>(array->second).push_back(dict);
 		}
 		return plist::save(local_index_path(installDir), plist);
@@ -579,7 +579,7 @@ namespace bundles_db
 	{
 		std::map<oak::uuid_t, bundle_ptr> bundles;
 		iterate(bundle, index)
-			bundles.insert(std::make_pair((*bundle)->uuid(), *bundle));
+			bundles.emplace((*bundle)->uuid(), *bundle);
 
 		std::set<oak::uuid_t> dependencies, queue;
 		iterate(bundle, startBundles)

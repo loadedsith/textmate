@@ -41,9 +41,6 @@ static NSString* const kFoldingsColumnIdentifier  = @"foldings";
 	NSScrollView* gutterScrollView;
 	GutterView* gutterView;
 	NSColor* gutterDividerColor;
-	NSDictionary* gutterImages;
-	NSDictionary* gutterHoverImages;
-	NSDictionary* gutterPressedImages;
 
 	NSBox* gutterDividerView;
 	NSBox* statusDividerView;
@@ -60,15 +57,14 @@ static NSString* const kFoldingsColumnIdentifier  = @"foldings";
 	IBOutlet NSPanel* tabSizeSelectorPanel;
 }
 @property (nonatomic, readonly) OTVStatusBar* statusBar;
-@property (nonatomic, retain) NSDictionary* gutterImages;
-@property (nonatomic, retain) NSDictionary* gutterHoverImages;
-@property (nonatomic, retain) NSDictionary* gutterPressedImages;
+@property (nonatomic) NSDictionary* gutterImages;
+@property (nonatomic) NSDictionary* gutterHoverImages;
+@property (nonatomic) NSDictionary* gutterPressedImages;
 @property (nonatomic) OakFilterWindowController* filterWindowController;
 @property (nonatomic) SymbolChooser*             symbolChooser;
+@property (nonatomic) NSArray* observedKeys;
 - (void)updateStyle;
 @end
-
-static NSString* const ObservedTextViewKeyPaths[] = { @"selectionString", @"tabSize", @"softTabs", @"isMacroRecording"};
 
 struct document_view_callback_t : document::document_t::callback_t
 {
@@ -103,7 +99,6 @@ private:
 
 @implementation OakDocumentView
 @synthesize textView, statusBar;
-@synthesize gutterImages, gutterHoverImages, gutterPressedImages;
 
 - (id)initWithFrame:(NSRect)aRect
 {
@@ -154,8 +149,9 @@ private:
 		doc->set_custom_name("null document"); // without a name it grabs an ‘untitled’ token
 		[self setDocument:doc];
 
-		iterate(keyPath, ObservedTextViewKeyPaths)
-			[textView addObserver:self forKeyPath:*keyPath options:NSKeyValueObservingOptionInitial context:NULL];
+		self.observedKeys = @[ @"selectionString", @"tabSize", @"softTabs", @"isMacroRecording"];
+		for(NSString* keyPath in self.observedKeys)
+			[textView addObserver:self forKeyPath:keyPath options:NSKeyValueObservingOptionInitial context:NULL];
 	}
 	return self;
 }
@@ -255,7 +251,7 @@ private:
 
 - (void)observeValueForKeyPath:(NSString*)aKeyPath ofObject:(id)observableController change:(NSDictionary*)changeDictionary context:(void*)userData
 {
-	if(observableController != textView || ![[NSArray arrayWithObjects:&ObservedTextViewKeyPaths[0] count:sizeofA(ObservedTextViewKeyPaths)] containsObject:aKeyPath])
+	if(observableController != textView || ![self.observedKeys containsObject:aKeyPath])
 		return;
 
 	if([aKeyPath isEqualToString:@"selectionString"])
@@ -290,8 +286,8 @@ private:
 	gutterView.delegate    = nil;
 	statusBar.delegate     = nil;
 
-	iterate(keyPath, ObservedTextViewKeyPaths)
-		[textView removeObserver:self forKeyPath:*keyPath];
+	for(NSString* keyPath in self.observedKeys)
+		[textView removeObserver:self forKeyPath:keyPath];
 	[[NSNotificationCenter defaultCenter] removeObserver:self];
 
 	[self setDocument:document::document_ptr()];
@@ -591,7 +587,7 @@ private:
 
 	std::multimap<std::string, bundles::item_ptr, text::less_t> ordered;
 	for(auto item : bundles::query(bundles::kFieldAny, NULL_STR, scope::wildcard, bundles::kItemTypeBundle))
-		ordered.insert(std::make_pair(item->name(), item));
+		ordered.emplace(item->name(), item);
 
 	NSMenuItem* selectedItem = nil;
 	for(auto pair : ordered)
@@ -712,19 +708,19 @@ static std::string const kBookmarkType = "bookmark";
 
 - (NSImage*)imageForState:(NSUInteger)state forColumnWithIdentifier:(id)identifier
 {
-	NSArray* array = gutterImages[identifier];
+	NSArray* array = _gutterImages[identifier];
 	return array && state < [array count] && array[state] != [NSNull null] ? array[state] : nil;
 }
 
 - (NSImage*)hoverImageForState:(NSUInteger)state forColumnWithIdentifier:(id)identifier
 {
-	NSArray* array = gutterHoverImages[identifier];
+	NSArray* array = _gutterHoverImages[identifier];
 	return array && state < [array count] && array[state] != [NSNull null] ? array[state] : nil;
 }
 
 - (NSImage*)pressedImageForState:(NSUInteger)state forColumnWithIdentifier:(id)identifier
 {
-	NSArray* array = gutterPressedImages[identifier];
+	NSArray* array = _gutterPressedImages[identifier];
 	return array && state < [array count] && array[state] != [NSNull null] ? array[state] : nil;
 }
 
@@ -959,7 +955,7 @@ static std::string const kBookmarkType = "bookmark";
 
 	theme_ptr theme = parse_theme(bundles::lookup(to_s(self.themeUUID)));
 	theme = theme->copy_with_font_name_and_size(to_s(fontName), fontSize * self.fontScale);
-	layout.reset(new ng::layout_t(document->buffer(), theme, /* softWrap: */ true));
+	layout = std::make_shared<ng::layout_t>(document->buffer(), theme, /* softWrap: */ true);
 	layout->set_viewport_size(CGSizeMake(self.pageWidth, self.pageHeight));
 	layout->update_metrics(CGRectMake(0, 0, CGFLOAT_MAX, CGFLOAT_MAX));
 
@@ -1015,7 +1011,7 @@ static std::string const kBookmarkType = "bookmark";
 
 		std::multimap<std::string, bundles::item_ptr, text::less_t> ordered;
 		for(auto item : bundles::query(bundles::kFieldAny, NULL_STR, scope::wildcard, bundles::kItemTypeTheme))
-			ordered.insert(std::make_pair(item->name(), item));
+			ordered.emplace(item->name(), item);
 
 		for(auto pair : ordered)
 		{

@@ -38,16 +38,16 @@ std::pair<std::vector<bundles::item_ptr>, std::map< oak::uuid_t, std::vector<oak
 	std::set<oak::uuid_t> loadedItems;
 
 	bool local = true;
-	for(auto bundlesPath : bundlesPaths)
+	for(auto const& bundlesPath : bundlesPaths)
 	{
-		for(auto bundlePath : cache.entries(bundlesPath, "*.tm[Bb]undle"))
+		for(auto const& bundlePath : cache.entries(bundlesPath, "*.tm[Bb]undle"))
 		{
 			bundles::item_ptr bundle;
 			std::set<oak::uuid_t> hiddenItems;
 			bool skipEclipsedBundle = false;
 
-			auto entries = cache.entries(bundlePath, "{info.plist,Commands,DragCommands,Macros,Preferences,Proxies,Snippets,Syntaxes,Themes}");
-			for(auto infoPlistPath : entries)
+			auto const entries = cache.entries(bundlePath, "{info.plist,Commands,DragCommands,Macros,Preferences,Proxies,Snippets,Syntaxes,Themes}");
+			for(auto const& infoPlistPath : entries)
 			{
 				if(path::name(infoPlistPath) != "info.plist")
 					continue;
@@ -63,13 +63,13 @@ std::pair<std::vector<bundles::item_ptr>, std::map< oak::uuid_t, std::vector<oak
 					break;
 				}
 
-				bundle.reset(new bundles::item_t(bundleUUID, bundles::item_ptr(), bundles::kItemTypeBundle, local));
+				bundle = std::make_shared<bundles::item_t>(bundleUUID, bundles::item_ptr(), bundles::kItemTypeBundle, local);
 				bundle->add_path(infoPlistPath);
 
 				bool isDelta = false;
 				if(plist::get_key_path(plist, bundles::kFieldIsDelta, isDelta) && isDelta)
 				{
-					deltaItems.insert(std::make_pair(bundleUUID, delta_item_t(bundle, plist)));
+					deltaItems.emplace(bundleUUID, delta_item_t(bundle, plist));
 					break;
 				}
 
@@ -102,20 +102,20 @@ std::pair<std::vector<bundles::item_ptr>, std::map< oak::uuid_t, std::vector<oak
 
 				plist::array_t mainMenu;
 				plist::get_key_path(plist, "mainMenu.items", mainMenu);
-				menus.insert(std::make_pair(bundleUUID, to_menu(mainMenu, infoPlistPath)));
+				menus.emplace(bundleUUID, to_menu(mainMenu, infoPlistPath));
 
 				plist::dictionary_t subMenus;
 				plist::get_key_path(plist, "mainMenu.submenus", subMenus);
-				for(auto submenuIter : subMenus)
+				for(auto const& submenuIter : subMenus)
 				{
 					std::string name;
 					plist::array_t uuids;
 					if(oak::uuid_t::is_valid(submenuIter.first) && plist::get_key_path(submenuIter.second, bundles::kFieldName, name) && plist::get_key_path(submenuIter.second, "items", uuids))
 					{
-						bundles::item_ptr item(new bundles::item_t(submenuIter.first, bundle, bundles::kItemTypeMenu));
+						auto item = std::make_shared<bundles::item_t>(submenuIter.first, bundle, bundles::kItemTypeMenu);
 						item->set_name(name);
 						items.push_back(item);
-						menus.insert(std::make_pair(submenuIter.first, to_menu(uuids, infoPlistPath)));
+						menus.emplace(submenuIter.first, to_menu(uuids, infoPlistPath));
 					}
 					else
 					{
@@ -125,7 +125,7 @@ std::pair<std::vector<bundles::item_ptr>, std::map< oak::uuid_t, std::vector<oak
 
 				plist::array_t uuids;
 				plist::get_key_path(plist, "mainMenu.excludedItems", uuids);
-				for(auto uuid : uuids)
+				for(auto const& uuid : uuids)
 				{
 					std::string const* str = boost::get<std::string>(&uuid);
 					if(str && oak::uuid_t::is_valid(*str))
@@ -184,13 +184,13 @@ std::pair<std::vector<bundles::item_ptr>, std::map< oak::uuid_t, std::vector<oak
 						if(uuid == "615998FE-A13B-4199-A670-E5A892A1C43A")
 							continue;
 
-						bundles::item_ptr item(new bundles::item_t(uuid, bundle, dirs[i].kind, local));
+						auto item = std::make_shared<bundles::item_t>(uuid, bundle, dirs[i].kind, local);
 						item->add_path(itemPath);
 
 						bool isDelta = false;
 						if(plist::get_key_path(plist, bundles::kFieldIsDelta, isDelta) && isDelta)
 						{
-							deltaItems.insert(std::make_pair(uuid, delta_item_t(item, plist)));
+							deltaItems.emplace(uuid, delta_item_t(item, plist));
 							continue;
 						}
 
@@ -208,7 +208,7 @@ std::pair<std::vector<bundles::item_ptr>, std::map< oak::uuid_t, std::vector<oak
 						}
 
 						if(hiddenItems.find(item->uuid()) != hiddenItems.end())
-							plist.insert(std::make_pair(bundles::kFieldHideFromUser, true));
+							plist.emplace(bundles::kFieldHideFromUser, true);
 
 						item->initialize(plist);
 						items.push_back(item);

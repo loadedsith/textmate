@@ -40,19 +40,14 @@ namespace
 						return;
 					}
 
-					std::string format;
-					while(it != last && *it != '/')
+					format_string::format_string_t format(std::string(it, last), "/");
+					if(format.length() == 0)
 					{
-						if(*it == '\\' && it + 1 != last)
-							format += *it++;
-						format += *it++;
-					}
-
-					if(!parse_char(it, last, '/'))
-					{
-						fprintf(stderr, "malformed symbol transformation at offset %td (expected ‘/’): %s\n", it - src.data(), src.c_str());
+						fprintf(stderr, "malformed symbol transformation at offset %td (expected /format string/): %s\n", it - src.data(), src.c_str());
 						return;
 					}
+
+					it += format.length();
 
 					std::string options;
 					while(it != last && 'a' <= *it && *it <= 'z')
@@ -117,7 +112,7 @@ namespace ng
 			{
 				plist::any_t const& symbolTransformationValue = bundles::value_for_setting("symbolTransformation", *it);
 				std::string const* symbolTransformation = boost::get<std::string>(&symbolTransformationValue);
-				transforms.insert(std::make_pair(*it, transform_t(symbolTransformation ? *symbolTransformation : "")));
+				transforms.emplace(*it, transform_t(symbolTransformation ? *symbolTransformation : ""));
 			}
 		}
 

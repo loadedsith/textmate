@@ -15,7 +15,7 @@
 #import <OakFoundation/OakFindProtocol.h>
 #import <OakFoundation/OakTimer.h>
 #import <OakSystem/application.h>
-#import <CrashReporter/utility.h>
+#import <crash/info.h>
 #import <BundleMenu/BundleMenu.h>
 #import <BundlesManager/BundlesManager.h>
 #import <bundles/bundles.h>
@@ -54,7 +54,7 @@ NSString* const kUserDefaultsScrollPastEndKey      = @"scrollPastEnd";
 
 struct buffer_refresh_callback_t;
 
-@interface OakTextView ()
+@interface OakTextView () <NSIgnoreMisspelledWords, NSChangeSpelling>
 {
 	OBJC_WATCH_LEAKS(OakTextView);
 
@@ -381,7 +381,7 @@ static std::string shell_quote (std::vector<std::string> paths)
 {
 	if([self.delegate respondsToSelector:@selector(scopeAttributes)])
 		return [self.delegate scopeAttributes];
-	return nil;
+	return @"";
 }
 
 // =================================
@@ -418,6 +418,9 @@ static std::string shell_quote (std::vector<std::string> paths)
 
 - (void)highlightRanges:(ng::ranges_t const&)ranges
 {
+	if(ranges.empty())
+		return;
+
 	iterate(range, ranges)
 		layout->remove_enclosing_folds(range->min().index, range->max().index);
 	[self ensureSelectionIsInVisibleArea:self];
@@ -493,7 +496,7 @@ static std::string shell_quote (std::vector<std::string> paths)
 
 		editor = ng::editor_for_document(document);
 		wrapColumn = settings.get(kSettingsWrapColumnKey, wrapColumn);
-		layout.reset(new ng::layout_t(document->buffer(), theme, settings.get(kSettingsSoftWrapKey, false), self.scrollPastEnd, wrapColumn, document->folded()));
+		layout = std::make_shared<ng::layout_t>(document->buffer(), theme, settings.get(kSettingsSoftWrapKey, false), self.scrollPastEnd, wrapColumn, document->folded());
 		if(settings.get(kSettingsShowWrapColumnKey, false))
 			layout->set_draw_wrap_column(true);
 
@@ -1185,6 +1188,7 @@ doScroll:
 
 - (void)performBundleItem:(bundles::item_ptr)item
 {
+	crash_reporter_info_t info(text::format("%s %s", sel_getName(_cmd), item->full_name().c_str()));
 	// D(DBF_OakTextView_BundleItems, bug("%s\n", anItem->full_name().c_str()););
 	AUTO_REFRESH;
 	switch(item->kind())
@@ -1260,7 +1264,7 @@ static plist::any_t normalize_potential_dictionary (plist::any_t const& action)
 	{
 		plist::dictionary_t res;
 		citerate(pair, *dict)
-			res.insert(std::make_pair(ns::normalize_event_string(pair->first), normalize_potential_dictionary(pair->second)));
+			res.emplace(ns::normalize_event_string(pair->first), normalize_potential_dictionary(pair->second));
 		return res;
 	}
 	return action;
@@ -1300,14 +1304,14 @@ static void update_menu_key_equivalents (NSMenu* menu, action_to_key_t const& ac
 		iterate(path, KeyBindingLocations)
 		{
 			citerate(pair, plist::load(*path))
-				KeyBindings.insert(std::make_pair(ns::normalize_event_string(pair->first), normalize_potential_dictionary(pair->second)));
+				KeyBindings.emplace(ns::normalize_event_string(pair->first), normalize_potential_dictionary(pair->second));
 		}
 
 		action_to_key_t actionToKey;
 		iterate(pair, KeyBindings)
 		{
 			if(std::string const* selector = boost::get<std::string>(&pair->second))
-				actionToKey.insert(std::make_pair(*selector, pair->first));
+				actionToKey.emplace(*selector, pair->first);
 		}
 
 		update_menu_key_equivalents([NSApp mainMenu], actionToKey);
@@ -1641,7 +1645,7 @@ static void update_menu_key_equivalents (NSMenu* menu, action_to_key_t const& ac
 	CGRect r1 = layout->rect_at_index(editor->ranges().last().first);
 	CGRect r2 = layout->rect_at_index(editor->ranges().last().last);
 	CGRect r = r1.origin.y == r2.origin.y && r1.origin.x < r2.origin.x ? r1 : r2;
-	NSPoint p = NSMakePoint(CGRectGetMinX(r), CGRectGetMaxY(r)-1);
+	NSPoint p = NSMakePoint(CGRectGetMinX(r), CGRectGetMaxY(r)+4);
 	if(NSPointInRect(p, [self visibleRect]))
 			{ p = [[self window] convertBaseToScreen:[self convertPoint:p toView:nil]]; }
 	else	{ p = [NSEvent mouseLocation]; p.y -= 16; }
@@ -1676,17 +1680,19 @@ static void update_menu_key_equivalents (NSMenu* menu, action_to_key_t const& ac
 	return word;
 }
 
-- (NSMenu*)contextMenuWithMisspelledWord:(NSString*)aWord
+- (NSMenu*)contextMenuWithMisspelledWord:(NSString*)aWord andOtherActions:(BOOL)otherActions
 {
 	NSMenu* menu = [[NSMenu alloc] initWithTitle:@""];
 	NSMenuItem* item = nil;
 
 	if(aWord)
 	{
+		char key = 0;
 		[[NSSpellChecker sharedSpellChecker] updateSpellingPanelWithMisspelledWord:aWord];
 		for(NSString* guess in [[NSSpellChecker sharedSpellChecker] guessesForWord:aWord])
 		{
-			item = [menu addItemWithTitle:guess action:@selector(contextMenuPerformCorrectWord:) keyEquivalent:@""];
+			item = [menu addItemWithTitle:guess action:@selector(contextMenuPerformCorrectWord:) keyEquivalent:key < 10 ? [NSString stringWithFormat:@"%c", '0' + (++key % 10)] : @""];
+			[item setKeyEquivalentModifierMask:0];
 			[item setRepresentedObject:guess];
 		}
 
@@ -1694,11 +1700,19 @@ static void update_menu_key_equivalents (NSMenu* menu, action_to_key_t const& ac
 			[menu addItemWithTitle:@"No Guesses Found" action:nil keyEquivalent:@""];
 
 		[menu addItem:[NSMenuItem separatorItem]];
-		item = [menu addItemWithTitle:@"Ignore Spelling" action:@selector(contextMenuPerformIgnoreSpelling:) keyEquivalent:@""];
+		item = [menu addItemWithTitle:@"Ignore Spelling" action:@selector(contextMenuPerformIgnoreSpelling:) keyEquivalent:@"-"];
+		[item setKeyEquivalentModifierMask:0];
 		[item setRepresentedObject:aWord];
-		item = [menu addItemWithTitle:@"Learn Spelling" action:@selector(contextMenuPerformLearnSpelling:) keyEquivalent:@""];
+		item = [menu addItemWithTitle:@"Learn Spelling" action:@selector(contextMenuPerformLearnSpelling:) keyEquivalent:@"="];
+		[item setKeyEquivalentModifierMask:0];
 		[item setRepresentedObject:aWord];
 		[menu addItem:[NSMenuItem separatorItem]];
+
+		if(!otherActions)
+		{
+			[menu addItemWithTitle:@"Find Next" action:@selector(checkSpelling:) keyEquivalent:@";"];
+			return menu;
+		}
 	}
 
 	static struct { NSString* title; SEL action; } const items[] =
@@ -1707,8 +1721,8 @@ static void update_menu_key_equivalents (NSMenu* menu, action_to_key_t const& ac
 		{ @"Copy",                    @selector(copy:)                          },
 		{ @"Paste",                   @selector(paste:)                         },
 		{ nil,                        nil                                       },
-		{ @"Fold/Unfold",             @selector(toggleFolding:)                 },
-		{ @"Filter Through Command…", @selector(orderFrontExecuteCommandPanel:) },
+		{ @"Fold/Unfold",             @selector(toggleCurrentFolding:)          },
+		{ @"Filter Through Command…", @selector(orderFrontRunCommandWindow:)    },
 	};
 
 	for(size_t i = 0; i < sizeofA(items); i++)
@@ -1724,14 +1738,11 @@ static void update_menu_key_equivalents (NSMenu* menu, action_to_key_t const& ac
 {
 	NSPoint point = [self convertPoint:[anEvent locationInWindow] fromView:nil];
 	ng::index_t const& click = layout->index_at_point(point);
-	return [self contextMenuWithMisspelledWord:[self selectAndReturnMisspelledWordAtIndex:click.index]];
+	return [self contextMenuWithMisspelledWord:[self selectAndReturnMisspelledWordAtIndex:click.index] andOtherActions:YES];
 }
 
-- (void)showContextMenu:(id)sender
+- (void)showMenu:(NSMenu*)aMenu
 {
-	NSString* word = [self selectAndReturnMisspelledWordAtIndex:editor->ranges().last().last.index];
-	NSMenu* menu = [self contextMenuWithMisspelledWord:word];
-
 	NSWindow* win = [self window];
 	NSEvent* anEvent = [NSApp currentEvent];
 	NSEvent* fakeEvent = [NSEvent
@@ -1745,8 +1756,14 @@ static void update_menu_key_equivalents (NSMenu* menu, action_to_key_t const& ac
 		clickCount:1
 		pressure:1];
 
-	[NSMenu popUpContextMenu:menu withEvent:fakeEvent forView:self];
+	[NSMenu popUpContextMenu:aMenu withEvent:fakeEvent forView:self];
 	[win performSelector:@selector(invalidateCursorRectsForView:) withObject:self afterDelay:0.0]; // with option used as modifier, the cross-hair cursor will stick
+}
+
+- (void)showContextMenu:(id)sender
+{
+	NSString* word = [self selectAndReturnMisspelledWordAtIndex:editor->ranges().last().last.index];
+	[self showMenu:[self contextMenuWithMisspelledWord:word andOtherActions:YES]];
 }
 
 - (void)contextMenuPerformCorrectWord:(NSMenuItem*)menuItem
@@ -1761,13 +1778,43 @@ static void update_menu_key_equivalents (NSMenu* menu, action_to_key_t const& ac
 - (void)contextMenuPerformIgnoreSpelling:(id)sender
 {
 	D(DBF_OakTextView_Spelling, bug("%s\n", [[sender representedObject] UTF8String]););
-	[[NSSpellChecker sharedSpellChecker] ignoreWord:[sender representedObject] inSpellDocumentWithTag:document->buffer().spelling_tag()];
+	[self ignoreSpelling:[sender representedObject]];
 }
 
 - (void)contextMenuPerformLearnSpelling:(id)sender
 {
 	D(DBF_OakTextView_Spelling, bug("%s\n", [[sender representedObject] UTF8String]););
 	[[NSSpellChecker sharedSpellChecker] learnWord:[sender representedObject]];
+
+	document->buffer().recheck_spelling(0, document->buffer().size());
+	[self setNeedsDisplay:YES];
+}
+
+- (void)ignoreSpelling:(id)sender
+{
+	NSString* word = nil;
+	if([sender respondsToSelector:@selector(selectedCell)])
+		word = [[sender selectedCell] stringValue];
+	else if([sender isKindOfClass:[NSString class]])
+		word = sender;
+
+	D(DBF_OakTextView_Spelling, bug("%s → %s\n", [[sender description] UTF8String], [word UTF8String]););
+	if(word)
+	{
+		[[NSSpellChecker sharedSpellChecker] ignoreWord:word inSpellDocumentWithTag:document->buffer().spelling_tag()];
+		document->buffer().recheck_spelling(0, document->buffer().size());
+		[self setNeedsDisplay:YES];
+	}
+}
+
+- (void)changeSpelling:(id)sender
+{
+	D(DBF_OakTextView_Spelling, bug("%s\n", [[sender description] UTF8String]););
+	if([sender respondsToSelector:@selector(selectedCell)])
+	{
+		AUTO_REFRESH;
+		editor->insert(to_s((NSString*)[[sender selectedCell] stringValue]));
+	}
 }
 
 // =========================
@@ -1834,7 +1881,7 @@ static void update_menu_key_equivalents (NSMenu* menu, action_to_key_t const& ac
 		{
 			std::map<std::string, std::string> variables;
 			for(NSString* key in [captures allKeys])
-				variables.insert(std::make_pair(to_s(key), to_s((NSString*)captures[key])));
+				variables.emplace(to_s(key), to_s((NSString*)captures[key]));
 			replacement = format_string::expand(replacement, variables);
 		}
 		editor->insert(replacement, true);
@@ -2418,6 +2465,51 @@ static char const* kOakMenuItemTitle = "OakMenuItemTitle";
 	}
 }
 
+- (void)checkSpelling:(id)sender
+{
+	NSSpellChecker* speller = [NSSpellChecker sharedSpellChecker];
+	ng::buffer_t& buf = document->buffer();
+
+	NSString* lang = [NSString stringWithCxxString:buf.spelling_language()];
+	if([[speller spellingPanel] isVisible])
+	{
+		if(![[speller language] isEqualToString:lang])
+		{
+			buf.set_spelling_language(to_s([speller language]));
+			[self setNeedsDisplay:YES];
+		}
+	}
+	else
+	{
+		[speller setLanguage:lang];
+	}
+
+	if(!buf.live_spelling())
+	{
+		buf.set_live_spelling(true);
+		[self setNeedsDisplay:YES];
+	}
+
+	auto nextMisspelling = buf.next_misspelling(editor->ranges().last().last.index);
+	if(nextMisspelling.first != nextMisspelling.second)
+	{
+		{
+			AUTO_REFRESH;
+			editor->set_selections(ng::range_t(nextMisspelling.first, nextMisspelling.second));
+		}
+
+		NSString* word = [NSString stringWithCxxString:buf.substr(nextMisspelling.first, nextMisspelling.second)];
+		[speller updateSpellingPanelWithMisspelledWord:word];
+
+		if(![[speller spellingPanel] isVisible])
+			[self showMenu:[self contextMenuWithMisspelledWord:word andOtherActions:NO]];
+	}
+	else
+	{
+		[speller updateSpellingPanelWithMisspelledWord:@""];
+	}
+}
+
 - (void)toggleContinuousSpellChecking:(id)sender
 {
 	bool flag = !document->buffer().live_spelling();
@@ -2637,7 +2729,7 @@ static char const* kOakMenuItemTitle = "OakMenuItemTitle";
 			plist[bundles::kFieldUUID] = to_s(uuid);
 			plist[bundles::kFieldName] = std::string("untitled");
 
-			bundles::item_ptr item(new bundles::item_t(uuid, bundle, bundles::kItemTypeMacro));
+			auto item = std::make_shared<bundles::item_t>(uuid, bundle, bundles::kItemTypeMacro);
 			item->set_plist(plist);
 			bundles::add_item(item);
 
@@ -3056,7 +3148,7 @@ static char const* kOakMenuItemTitle = "OakMenuItemTitle";
 
 static scope::context_t add_modifiers_to_scope (scope::context_t scope, NSUInteger modifiers)
 {
-	static struct { NSUInteger modifier; std::string scope; } const map[] =
+	static struct { NSUInteger modifier; char const* scope; } const map[] =
 	{
 		{ NSShiftKeyMask,      "dyn.modifier.shift"   },
 		{ NSControlKeyMask,    "dyn.modifier.control" },
@@ -3064,12 +3156,12 @@ static scope::context_t add_modifiers_to_scope (scope::context_t scope, NSUInteg
 		{ NSCommandKeyMask,    "dyn.modifier.command" }
 	};
 
-	for(size_t i = 0; i < sizeofA(map); ++i)
+	for(auto const& it : map)
 	{
-		if(modifiers & map[i].modifier)
+		if(modifiers & it.modifier)
 		{
-			scope.left  = scope.left.append(map[i].scope);
-			scope.right = scope.right.append(map[i].scope);
+			scope.left.push_scope(it.scope);
+			scope.right.push_scope(it.scope);
 		}
 	}
 
@@ -3209,7 +3301,7 @@ static scope::context_t add_modifiers_to_scope (scope::context_t scope, NSUInteg
 		editor->perform(anAction, layout.get(), [self continuousIndentCorrections], to_s([self scopeAttributes]));
 	}
 	catch(std::exception const& e) {
-		crash_reporter_info_t info(text::format("%s %s", sel_getName(aSelector), e.what()));
+		crash_reporter_info_t info(text::format("Performing @selector(%s)\nC++ Exception: %s", sel_getName(aSelector), e.what()));
 		abort();
 	}
 }

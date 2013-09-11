@@ -975,17 +975,19 @@ namespace ng
 				}
 				else if(leftScope.has_prefix(rightScope))
 				{
-					while(leftScope.parent() != rightScope)
-						leftScope = leftScope.parent();
-					// D(DBF_TextView_Internal, bug("select left side: %s\n", to_s(leftScope).c_str()););
-					from = extend_scope_left(buffer, from, leftScope);
+					scope::scope_t scope = leftScope;
+					for(leftScope.pop_scope(); leftScope != rightScope; leftScope.pop_scope())
+						scope = leftScope;
+					// D(DBF_TextView_Internal, bug("select left side: %s\n", to_s(scope).c_str()););
+					from = extend_scope_left(buffer, from, scope);
 				}
 				else if(rightScope.has_prefix(leftScope))
 				{
-					while(rightScope.parent() != leftScope)
-						rightScope = rightScope.parent();
-					// D(DBF_TextView_Internal, bug("select right side: %s\n", to_s(rightScope).c_str()););
-					to = extend_scope_right(buffer, to, rightScope);
+					scope::scope_t scope = rightScope;
+					for(rightScope.pop_scope(); rightScope != leftScope; rightScope.pop_scope())
+						scope = rightScope;
+					// D(DBF_TextView_Internal, bug("select right side: %s\n", to_s(scope).c_str()););
+					to = extend_scope_right(buffer, to, scope);
 				}
 				else if(from == to && buffer.convert(to).column == 0)
 				{
@@ -1092,29 +1094,29 @@ namespace ng
 			citerate(range, selection)
 			{
 				scope::scope_t newScope = shared_prefix(buffer.scope(range->min().index).right, buffer.scope(range->max().index).left);
-				scope = scope ? shared_prefix(scope, newScope) : newScope;
+				scope = scope.empty() ? newScope : shared_prefix(scope, newScope);
 			}
 			res = scope;
 		}
 
-		if(extraAttributes != NULL_STR)
+		if(!extraAttributes.empty() && extraAttributes != NULL_STR)
 		{
-			citerate(atom, text::tokenize(extraAttributes.begin(), extraAttributes.end(), ' '))
+			for(auto const& str : text::tokenize(extraAttributes.begin(), extraAttributes.end(), ' '))
 			{
-				res.left  = res.left.append(*atom);
-				res.right = res.right.append(*atom);
+				res.left.push_scope(str);
+				res.right.push_scope(str);
 			}
 		}
 
 		if(selection.size() > 1)
 		{
-			res.left  = res.left.append("dyn.caret.mixed");
-			res.right = res.right.append("dyn.caret.mixed");
+			res.left.push_scope("dyn.caret.mixed");
+			res.right.push_scope("dyn.caret.mixed");
 		}
 		else if(selection.last().columnar)
 		{
-			res.left  = res.left.append("dyn.caret.mixed.columnar");
-			res.right = res.right.append("dyn.caret.mixed.columnar");
+			res.left.push_scope("dyn.caret.mixed.columnar");
+			res.right.push_scope("dyn.caret.mixed.columnar");
 		}
 		else
 		{
@@ -1122,20 +1124,20 @@ namespace ng
 			size_t const rightCaret = selection.last().max().index;
 
 			if(leftCaret == 0)
-				res.left = res.left.append("dyn.caret.begin.document");
+				res.left.push_scope("dyn.caret.begin.document");
 			else if(leftCaret == buffer.begin(buffer.convert(leftCaret).line))
-				res.left = res.left.append("dyn.caret.begin.line");
+				res.left.push_scope("dyn.caret.begin.line");
 
 			if(rightCaret == buffer.size())
-				res.right = res.right.append("dyn.caret.end.document");
+				res.right.push_scope("dyn.caret.end.document");
 			else if(rightCaret == buffer.eol(buffer.convert(rightCaret).line))
-				res.right = res.right.append("dyn.caret.end.line");
+				res.right.push_scope("dyn.caret.end.line");
 		}
 
 		if(not_empty(buffer, selection))
 		{
-			res.left  = res.left.append("dyn.selection");
-			res.right = res.right.append("dyn.selection");
+			res.left.push_scope("dyn.selection");
+			res.right.push_scope("dyn.selection");
 		}
 
 		return res;
@@ -1223,7 +1225,7 @@ namespace ng
 				{
 					range_t r(total + offset + m.first, total + offset + m.second, false, false, true);
 					if(is_subset(r, ranges))
-						res.insert(std::make_pair(r, captures));
+						res.emplace(r, captures);
 				}
 				ASSERT_NE(m.second, 0); ASSERT_LE(m.second, len - offset);
 				offset += m.second;
@@ -1237,7 +1239,7 @@ namespace ng
 		{
 			range_t r(total + m.first, total + m.second, false, false, true);
 			if(is_subset(r, ranges))
-				res.insert(std::make_pair(r, captures));
+				res.emplace(r, captures);
 			captures.clear();
 			m = f.match(NULL, 0, &captures);
 		}
@@ -1275,7 +1277,7 @@ namespace ng
 			}
 
 			if(m && range.sorted() != ng::range_t(m.begin(), m.end()))
-				res.insert(std::make_pair(ng::range_t(m.begin(), m.end()), m.captures()));
+				res.emplace(ng::range_t(m.begin(), m.end()), m.captures());
 		}
 
 		return res;
@@ -1303,7 +1305,7 @@ namespace ng
 			iterate(range, selection)
 			{
 				anchor = options & find::backwards ? std::min(range->min(), anchor) : std::max(range->max(), anchor);
-				res.insert(std::make_pair(*range, std::map<std::string, std::string>()));
+				res.emplace(*range, std::map<std::string, std::string>());
 			}
 
 			if(options & find::backwards)

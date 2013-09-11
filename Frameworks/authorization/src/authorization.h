@@ -8,8 +8,8 @@ namespace osx
 {
 	struct authorization_t
 	{
-		authorization_t () : helper(new helper_t) { }
-		authorization_t (std::string const& hex) : helper(new helper_t(hex)) { }
+		authorization_t () : helper(std::make_shared<helper_t>()) { }
+		authorization_t (std::string const& hex) : helper(std::make_shared<helper_t>(hex)) { }
 
 		bool check_right (std::string const& right) const  { return helper->copy_right(right, kAuthorizationFlagDefaults); }
 		bool obtain_right (std::string const& right) const { return helper->copy_right(right, kAuthorizationFlagInteractionAllowed|kAuthorizationFlagExtendRights); }
@@ -24,7 +24,7 @@ namespace osx
 			{
 				std::vector<char> v;
 				for(size_t i = 0; i+1 < hex.size() && isxdigit(hex[i]) && isxdigit(hex[i+1]); i += 2)
-					v.push_back(std::stol(hex.substr(i, 2), NULL, 16));
+					v.push_back(digittoint(hex[i]) << 4 | digittoint(hex[i+1]));
 
 				if(v.size() == sizeof(AuthorizationExternalForm))
 				{
@@ -82,8 +82,8 @@ namespace osx
 				AuthorizationExternalForm extAuth;
 				if(AuthorizationMakeExternalForm(_authorization, &extAuth) == errAuthorizationSuccess)
 				{
-					foreach(ch, (char*)&extAuth, (char*)(&extAuth + 1))
-						res += text::format("%02X", *ch);
+					for(char* it = (char*)&extAuth; it != (char*)(&extAuth + 1); ++it)
+						res += text::format("%02X", *it);
 				}
 				return res;
 			}

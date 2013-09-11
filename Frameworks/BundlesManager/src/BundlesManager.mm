@@ -159,7 +159,7 @@ static double const kPollInterval = 3*60*60;
 
 	std::multimap<std::string, bundles::item_ptr, text::less_t> ordered;
 	for(auto item : bundles::query(bundles::kFieldAny, NULL_STR, scope::wildcard, bundles::kItemTypeBundle))
-		ordered.insert(std::make_pair(item->name(), item));
+		ordered.emplace(item->name(), item);
 
 	for(auto pair : ordered)
 	{
@@ -337,7 +337,7 @@ static double const kPollInterval = 3*60*60;
 	cache.cleanup(bundlesPaths);
 	if(cache.dirty())
 	{
-		cache.save(bundlesIndexPath);
+		cache.save_capnp(bundlesIndexPath);
 		cache.set_dirty(false);
 	}
 	_needsSaveBundlesIndex = NO;
@@ -458,13 +458,13 @@ namespace
 					plist::array_t settings;
 					iterate(settingsPair, *dictionary)
 						settings.push_back(settingsPair->first);
-					res.insert(std::make_pair(pair.first, settings));
+					res.emplace(pair.first, settings);
 				}
 			}
 			else if(pair.first == kFieldChangedItems)
 			{
 				if(plist::dictionary_t const* dictionary = boost::get<plist::dictionary_t>(&pair.second))
-					res.insert(std::make_pair(pair.first, prune_dictionary(*dictionary)));
+					res.emplace(pair.first, prune_dictionary(*dictionary));
 			}
 			else
 			{
@@ -479,8 +479,21 @@ namespace
 {
 	for(auto path : bundles::locations())
 		bundlesPaths.push_back(path::join(path, "Bundles"));
-	bundlesIndexPath = path::join(path::home(), "Library/Caches/com.macromates.TextMate/BundlesIndex.plist");
-	cache.load(bundlesIndexPath, &prune_dictionary);
+	bundlesIndexPath = path::join(path::home(), "Library/Caches/com.macromates.TextMate/BundlesIndex.binary");
+	cache.set_content_filter(&prune_dictionary);
+
+	std::string const oldPath = path::join(path::home(), "Library/Caches/com.macromates.TextMate/BundlesIndex.plist");
+	if(access(oldPath.c_str(), R_OK) == 0)
+	{
+		cache.load(oldPath);
+		cache.save_capnp(bundlesIndexPath);
+		unlink(oldPath.c_str());
+	}
+	else
+	{
+		cache.load_capnp(bundlesIndexPath);
+	}
+
 	_needsCreateBundlesIndex = YES;
 	[self createBundlesIndex:self];
 }

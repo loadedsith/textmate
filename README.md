@@ -25,6 +25,7 @@ To bootstrap the build you need to run `./configure` (in the root of the source 
 * `builddir` — location of built files. Defaults to `~/build/TextMate`.
 * `identity` — for Apple’s `codesign`. Defaults to ad-hoc signing, which does not use an identity at all.
 * `boostdir` — location of boost includes. By default it will search various locations including MacPorts and Homebrew.
+* `CC` and `CXX` — C and C++ compiler, see [clang 3.2](#clang-32) info below.
 
 In the simplest case you would run:
 
@@ -44,6 +45,9 @@ To build the source the following must first be installed on your system:
  * [boost][]         — portable C++ source libraries
  * [multimarkdown][] — marked-up plain text compiler
  * [mercurial][]     — distributed SCM system
+ * [Cap’n Proto][capnp] — serialization library
+
+You need to manually install [Cap’n Proto][capnp], the rest can be installed via [MacPorts][] or [homebrew][].
 
 To install using [MacPorts][] run:
 
@@ -53,11 +57,23 @@ If `port` fails with a build error then likely you need to agree (system-wide) t
 
 	sudo xcodebuild -license
 
-You can also install the above using [homebrew][]:
+To install using [homebrew][] run:
 
 	brew install ragel boost multimarkdown hg ninja
 
 In practice `hg` ([mercurial][]) is only required for the SCM library’s tests so you can skip this dependency if you don’t mind a failing test.
+
+### Clang 3.2
+
+The version of clang included with Xcode 4.x is not recent enough to build the [Cap’n proto][capnp] library so you need to manually install a newer version of clang. See [Cap’n proto][capnp] install instructions.
+
+To build TextMate with this version of clang you will need to symlink the `arclite` stuff:
+
+    ln -s /usr/lib/arc ~/clang-3.2/lib/arc
+
+Also, to make TextMate use this version of clang, you must set `CC` and `CXX` when calling `./configure`, e.g.:
+
+    CC=$HOME/clang-3.2/bin/clang CXX=$HOME/clang-3.2/bin/clang++ ./configure
 
 ### OS X 10.7 (Lion)
 
@@ -68,16 +84,6 @@ If you are on OS X 10.7 you need `pgrep` and `pkill` (used by the “relaunch”
 Or using [homebrew][]:
 
 	brew install proctools
-
-### Clang 3.2 / 4.0
-
-You also need a recent version of clang. This should be included with Xcode 4.4+ available for both Lion and Mountain Lion.
-
-If you have multiple versions of Xcode installed, be sure to run `sudo xcode-select -switch` so that `./configure` finds the most recent.
-
-We also require the [libc++][] library, so while you can install clang from MacPorts or Homebrew, you’d need to also install this library (or make it use the one from Xcode).
-
-[libc++]: http://libcxx.llvm.org/
 
 ## Building from within TextMate
 
@@ -136,6 +142,7 @@ TextMate is a trademark of Allan Odgaard.
 [multimarkdown]: http://fletcherpenney.net/multimarkdown/
 [ragel]:         http://www.complang.org/ragel/
 [mercurial]:     http://mercurial.selenic.com/
+[capnp]:         http://kentonv.github.io/capnproto/
 [clang 3.2]:     http://clang.llvm.org/
 [MacPorts]:      http://www.macports.org/
 [homebrew]:      http://mxcl.github.com/homebrew/

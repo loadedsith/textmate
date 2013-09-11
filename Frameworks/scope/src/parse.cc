@@ -29,7 +29,6 @@ namespace scope
 
 			bool parse_char (char const* ch, char* dst = NULL);
 
-			bool parse_atom (atom_t& res);
 			bool parse_scope (scope::types::scope_t& res);
 			bool parse_path (path_t& res);
 			bool parse_path (any_ptr& res);
@@ -40,38 +39,21 @@ namespace scope
 			bool parse_selector (selector_t& res);
 		};
 
-		bool context_t::parse_atom (atom_t& res)
-		{
-			ENTER;
-			if(parse_char("*"))
-				return res = scope::types::atom_any, true;
-
-			if(!isalnum(*it) && *it < 0x80)
-				return false;
-
-			char const* from = it;
-			while(isalnum(*it) || *it == '_' || *it == '-' || *it == '+' || *it > 0x7F)
-				++it;
-			res.insert(res.end(), from, it);
-			return true;
-		}
-
 		bool context_t::parse_scope (scope::types::scope_t& res)
 		{
 			ENTER;
-			bool rc = false;
 			res.anchor_to_previous = parse_char(">") && ws();
-			do {
-				res.atoms.emplace_back();
-				if(!parse_atom(res.atoms.back()))
-				{
-					res.atoms.pop_back();
-					break;
-				}
-				rc = true;
-			} while(parse_char("."));
 
-			return rc;
+			char const* from = it;
+			do {
+				if(it == last || (!isalnum(*it) && *it != '*' && *it < 0x80))
+					break;
+				while(it != last && (isalnum(*it) || *it == '_' || *it == '-' || *it == '+' || *it == '*' || *it > 0x7F))
+					++it;
+			} while(parse_char("."));
+			res.atoms.insert(res.atoms.end(), from, it);
+
+			return from != it;
 		}
 
 		bool context_t::parse_path (path_t& res)
@@ -80,13 +62,13 @@ namespace scope
 			res.anchor_to_bol = parse_char("^") && ws();
 
 			do {
-				res.scopes.push_back(scope::types::scope_t());
+				res.scopes.emplace_back();
 				if(!parse_scope(res.scopes.back()))
+				{
+					res.scopes.pop_back();
 					break;
+				}
 			} while(ws());
-
-			if(res.scopes.size() > 1)
-				res.scopes.pop_back();
 
 			res.anchor_to_eol = parse_char("$");
 			return true;
@@ -96,7 +78,10 @@ namespace scope
 		{
 			path_t tmp;
 			if(parse_path(tmp))
-				return res.reset(new path_t(tmp)), true;
+			{
+				res = std::make_shared<path_t>(tmp);
+				return true;
+			}
 			return false;
 		}
 
@@ -106,7 +91,10 @@ namespace scope
 			char const* bt = it;
 			group_t group;
 			if(parse_char("(") && parse_selector(group.selector) && ws() && parse_char(")"))
-				return res.reset(new group_t(group)), true;
+			{
+				res = std::make_shared<group_t>(group);
+				return true;
+			}
 			return it = bt, false;
 		}
 
@@ -117,7 +105,11 @@ namespace scope
 			filter_t filter;
 			char side;
 			if(parse_char("LRB", &side) && parse_char(":") && ws() && (parse_group(filter.selector) || parse_path(filter.selector)))
-				return filter.filter = filter_t::side_t(side), res.reset(new filter_t(filter)), true;
+			{
+				filter.filter = filter_t::side_t(side);
+				res = std::make_shared<filter_t>(filter);
+				return true;
+			}
 			return it = bt, false;
 		}
 
@@ -182,22 +174,6 @@ namespace scope
 		// =======
 		// = API =
 		// =======
-
-		char const* scope (char const* first, char const* last, scope::types::scope_t& scope)
-		{
-			context_t context = { first, last };
-			context.ws();
-			context.parse_scope(scope);
-			return context.it;
-		}
-
-		char const* path (char const* first, char const* last, scope::types::path_t& path)
-		{
-			context_t context = { first, last };
-			context.ws();
-			context.parse_path(path);
-			return context.it;
-		}
 
 		char const* selector (char const* first, char const* last, scope::types::selector_t& selector)
 		{

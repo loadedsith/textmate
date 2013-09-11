@@ -214,7 +214,7 @@ static be::entry_ptr parent_for_column (NSBrowser* aBrowser, NSInteger aColumn, 
 	for(NSInteger col = 0; col < [browser lastColumn]+1; ++col)
 	{
 		NSInteger row = [browser selectedRowInColumn:col];
-		if(row == -1)
+		if(row == -1 || row >= entry->children().size())
 			break;
 		entry = entry->children()[row];
 		selection.push_back(entry->identifier());
@@ -240,7 +240,7 @@ static be::entry_ptr parent_for_column (NSBrowser* aBrowser, NSInteger aColumn, 
 
 - (void)didChangeModifiedState
 {
-	[self setDocumentEdited:bundleItem && (changes.find(bundleItem) != changes.end() || propertiesChanged || bundleItemContent->is_modified())];
+	[self setDocumentEdited:bundleItem && (changes.find(bundleItem) != changes.end() || propertiesChanged || (bundleItemContent && bundleItemContent->is_modified()))];
 }
 
 // ==================
@@ -260,9 +260,9 @@ static be::entry_ptr parent_for_column (NSBrowser* aBrowser, NSInteger aColumn, 
 		std::map<std::string, std::string> environment = variables_for_path(oak::basic_environment());
 		ABMutableMultiValue* value = [[[ABAddressBook sharedAddressBook] me] valueForProperty:kABEmailProperty];
 		if(NSString* email = [value valueAtIndex:[value indexForIdentifier:[value primaryIdentifier]]])
-			environment.insert(std::make_pair("TM_ROT13_EMAIL", decode::rot13(to_s(email))));
+			environment.emplace("TM_ROT13_EMAIL", decode::rot13(to_s(email)));
 
-		bundles::item_ptr item(new bundles::item_t(oak::uuid_t().generate(), aType == bundles::kItemTypeBundle ? bundles::item_ptr() : bundle, aType));
+		auto item = std::make_shared<bundles::item_t>(oak::uuid_t().generate(), aType == bundles::kItemTypeBundle ? bundles::item_ptr() : bundle, aType);
 		plist::dictionary_t plist = plist::load(to_s(path));
 		expand_visitor_t visitor(environment);
 		visitor(plist);
@@ -270,7 +270,7 @@ static be::entry_ptr parent_for_column (NSBrowser* aBrowser, NSInteger aColumn, 
 		if(plist.find(bundles::kFieldName) == plist.end())
 			plist[bundles::kFieldName] = std::string("untitled");
 		item->set_plist(plist);
-		changes.insert(std::make_pair(item, plist));
+		changes.emplace(item, plist);
 		bundles::add_item(item);
 		[self revealBundleItem:item];
 		[self didChangeModifiedState];
@@ -349,7 +349,7 @@ static be::entry_ptr parent_for_column (NSBrowser* aBrowser, NSInteger aColumn, 
 
 	if(anItem->paths().empty())
 	{
-		changes.insert(std::make_pair(anItem, anItem->plist()));
+		changes.emplace(anItem, anItem->plist());
 		[self didChangeModifiedState];
 	}
 
@@ -463,15 +463,11 @@ static be::entry_ptr parent_for_column (NSBrowser* aBrowser, NSInteger aColumn, 
 	iterate(pair, changes)
 	{
 		auto item = pair->first;
-		bool rescanParentFolder = item->kind() == bundles::kItemTypeBundle && (!item->local() || item->paths().empty());
 
 		item->set_plist(pair->second);
 		if(item->save())
 		{
-			std::string itemFolder = path::parent(item->paths().front());
-			[[BundlesManager sharedInstance] reloadPath:[NSString stringWithCxxString:itemFolder]];
-			if(rescanParentFolder)
-				[[BundlesManager sharedInstance] reloadPath:[NSString stringWithCxxString:path::parent(itemFolder)]];
+			[[BundlesManager sharedInstance] reloadPath:[NSString stringWithCxxString:item->paths().front()]];
 		}
 		else
 		{

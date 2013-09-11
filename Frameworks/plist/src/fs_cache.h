@@ -8,8 +8,10 @@ namespace plist
 {
 	struct PUBLIC cache_t
 	{
-		void load (std::string const& path, plist::dictionary_t (*prune_dictionary)(plist::dictionary_t const&));
+		void load (std::string const& path);
+		void load_capnp (std::string const& path);
 		void save (std::string const& path) const;
+		void save_capnp (std::string const& path) const;
 
 		bool dirty () const        { return _dirty; }
 		void set_dirty (bool flag) { _dirty = flag; }
@@ -31,13 +33,16 @@ namespace plist
 			return copy_links(_cache.find(path), out);
 		}
 
+		void set_content_filter (plist::dictionary_t (*f)(plist::dictionary_t const&)) { _prune_dictionary = f; }
+		plist::dictionary_t (*content_filter () const)(plist::dictionary_t const&)     { return _prune_dictionary; }
+
 	private:
 		static int32_t const kPropertyCacheFormatVersion;
-		enum class entry_type_t { file, directory, link, missing };
+		enum class entry_type_t { file, directory, link, missing, unknown };
 
 		struct entry_t
 		{
-			entry_t (std::string const& path, entry_type_t type, std::string const& link) : _path(path), _type(type), _link(link) { }
+			entry_t (std::string const& path) : _path(path) { }
 
 			bool is_link () const                                    { return _type == entry_type_t::link; }
 			bool is_file () const                                    { return _type == entry_type_t::file; }
@@ -59,11 +64,14 @@ namespace plist
 			void set_modified (time_t modified)                      { _modified = modified; }
 			void set_event_id (uint64_t eventId)                     { _event_id = eventId; }
 			void set_content (plist::dictionary_t const& plist)      { _content = plist; }
+			void set_entries (std::vector<std::string> const& array) { _entries = array; }
+			void set_glob_string (std::string const& globString)     { _glob_string = globString; }
+
 			void set_entries (std::vector<std::string> const& array, std::string const& globString) { _entries = array; _glob_string = globString; }
 
 		private:
 			std::string _path;
-			entry_type_t _type;
+			entry_type_t _type = entry_type_t::unknown;
 			std::string _link;
 			std::string _glob_string;
 			time_t _modified;
@@ -72,7 +80,7 @@ namespace plist
 			std::vector<std::string> _entries;
 		};
 
-		plist::dictionary_t (*_prune_dictionary)(plist::dictionary_t const&);
+		plist::dictionary_t (*_prune_dictionary)(plist::dictionary_t const&) = nullptr;
 		std::map<std::string, entry_t> _cache;
 		bool _dirty = false;
 

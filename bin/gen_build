@@ -171,14 +171,19 @@ def flags_for_target(target)
   res
 end
 
-def compiler_for(source)
-  COMPILER_INFO[source[/\b[a-z]+$/]][:rule]
+def source_type(src)
+  srcExt = src[/\b[a-z\+]+$/]
+  srcExt == 'c++' ? 'cc' : srcExt
+end
+
+def compiler_for(src)
+  COMPILER_INFO[source_type(src)][:rule]
 end
 
 def pch_for(src, target)
-  srcExt = src[/\b[a-z]+$/]
+  srcExt = source_type(src)
   target['PRELUDE'].each do |pch|
-    if srcExt == pch[/\b[a-z]+$/]
+    if srcExt == source_type(pch)
       res = build_path(pch)
       res << "-no-arc" if srcExt == 'm'  && target['OBJC_FLAGS'] =~ /-fno-objc-arc/
       res << "-no-arc" if srcExt == 'mm' && target['OBJCXX_FLAGS'] =~ /-fno-objc-arc/
@@ -226,7 +231,7 @@ def sources(target)
   target['SOURCES'].each do |path|
     src = File.join(target[:path], path)
     case src
-      when /^(.*)\.(c|cc|m|mm)$/ then
+      when /^(.*)\.(c|cc|c\+\+|m|mm)$/ then
         base, ext = $1, $2
         cc  = compiler_for(src)
         dst = build_path("#{base}.o")
@@ -251,6 +256,20 @@ def sources(target)
         res << flags_for_target(target)
 
         objects << obj
+
+      when /^(.*)\.capnp$/ then
+        base = $1
+        res << "build #{src}.c++ #{src}.h: gen_capnp #{esc_path src} || #{esc_path(headers).join(' ')}\n"
+
+        src = "#{src}.c++"
+        cc  = compiler_for(src)
+        dst = build_path("#{base}.o")
+        res << "build #{dst}: #{cc} #{esc_path src} | #{pch_for(src, target)}.gch || #{esc_path(headers).join(' ')}\n"
+        res << "  depfile = #{dst}.d\n"
+        res << "  PCH_FLAGS = -D#{target[:name].gsub(/[^A-Za-z_]/, '_')}_EXPORTS -include #{pch_for(src, target)}\n"
+        res << flags_for_target(target)
+
+        objects << dst
 
       else
         STDERR << "*** unhandled source type ‘#{path}’\n"
@@ -714,7 +733,7 @@ open("#{builddir}/build.ninja", "w") do |io|
 
   TARGETS.root['PRELUDE'].each do |src|
     type = { 'c' => '-x c-header', 'm' => '-x objective-c-header', 'cc' => '-x c++-header', 'mm' => '-x objective-c++-header' }
-    ext = src[/\b[a-z]+$/]
+    ext = source_type(src)
     cc = COMPILER_INFO[ext][:compiler]
 
     io << "build #{pch_for(src, TARGETS.root)}.gch: #{compiler_for(src)} #{src} | #{cc}\n"
@@ -814,6 +833,11 @@ rule ln
 
 rule gen_ragel
   command = ragel -o $out $in
+  description = Generate source from ‘$in’…
+
+rule gen_capnp
+  command = capnp compile -oc++ $in
+  generator = 1
   description = Generate source from ‘$in’…
 
 rule gen_cxx_test

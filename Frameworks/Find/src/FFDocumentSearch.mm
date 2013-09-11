@@ -64,7 +64,7 @@ struct document_callback_t : document::document_t::callback_t
 		[self updateIcon];
 	}
 private:
-	FFMatch* self;
+	__weak FFMatch* self;
 };
 
 @implementation FFMatch
@@ -207,7 +207,7 @@ OAK_DEBUG_VAR(Find_FolderSearch);
 
 - (void)setSearchString:(NSString*)string
 {
-	searchString = [string UTF8String];
+	searchString = to_s(string ?: @"");
 }
 
 - (find::folder_scan_settings_t const&)folderOptions
@@ -223,7 +223,7 @@ OAK_DEBUG_VAR(Find_FolderSearch);
 - (void)start
 {
 	D(DBF_Find_FolderSearch, bug("folder: %s searchString: %s documentIdentifier: %s\n", folderOptions.path.c_str(), searchString.c_str(), to_s(self.documentIdentifier).c_str()););
-	scanner.reset(new find::scan_path_t);
+	scanner = std::make_shared<find::scan_path_t>();
 	scanner->set_folder_options(folderOptions);
 	scanner->set_string(searchString);
 	scanner->set_file_options(options);
@@ -430,6 +430,8 @@ OAK_DEBUG_VAR(Find_FolderSearch);
 {
 	if(anItem.action == @selector(saveAllDocuments:))
 		return self.hasPerformedReplacement && !self.hasPerformedSave;
+	else if(anItem.action == @selector(saveDocument:) || anItem.action == @selector(saveDocumentAs:))
+		return NO;
 	return [super validateUserInterfaceItem:anItem];
 }
 

@@ -13,9 +13,9 @@ static std::vector<bundles::item_ptr> binary_filters (std::string const& event, 
 {
 	std::string contentAsString = "";
 	size_t contentMatchSize = 256;
-	foreach(ch, content->begin(), content->end())
+	for(char ch : *content)
 	{
-		contentAsString += utf8::to_s(*ch);
+		contentAsString += utf8::to_s(ch);
 		if(--contentMatchSize == 0)
 			break;
 	}
@@ -26,7 +26,7 @@ static std::vector<bundles::item_ptr> binary_filters (std::string const& event, 
 		citerate(pattern, (*item)->values_for_field(bundles::kFieldContentMatch))
 		{
 			if(regexp::match_t const& m = regexp::search(*pattern, contentAsString))
-				ordering.insert(std::make_pair(-m.end(), *item));
+				ordering.emplace(-m.end(), *item);
 		}
 	}
 	return ordering.empty() ? std::vector<bundles::item_ptr>() : std::vector<bundles::item_ptr>(1, ordering.begin()->second);
@@ -82,7 +82,7 @@ namespace
 		if(placement != output::replace_document || format != output_format::text)
 			return fprintf(stderr, "*** unhandled placement/format (%d/%d): %s\n", placement, format, out.c_str()), false;
 
-		_context->set_content(io::bytes_ptr(new io::bytes_t(out)));
+		_context->set_content(std::make_shared<io::bytes_t>(out));
 		return true;
 	}
 }
@@ -123,7 +123,7 @@ namespace filter
 	void run (bundles::item_ptr filter, std::string const& path, io::bytes_ptr content, callback_ptr context)
 	{
 		std::map<std::string, std::string> variables = path_variables(path);
-		command::runner_ptr runner = command::runner(parse_command(filter), ng::buffer_t(), ng::ranges_t(), bundles::scope_variables(variables << filter->bundle_variables(), file::path_attributes(path)), command::delegate_ptr(new event_delegate_t(content, context)));
+		command::runner_ptr runner = command::runner(parse_command(filter), ng::buffer_t(), ng::ranges_t(), bundles::scope_variables(variables << filter->bundle_variables(), file::path_attributes(path)), std::make_shared<event_delegate_t>(content, context));
 		runner->launch();
 	}
 
