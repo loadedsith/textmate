@@ -11,6 +11,7 @@ static std::multimap<oak::uuid_t, HTMLOutputWindowController*> Windows;
 
 @interface HTMLOutputWindowController ()
 {
+	OBJC_WATCH_LEAKS(HTMLOutputWindowController);
 	command::runner_ptr runner;
 }
 @property (nonatomic, retain) OakHTMLOutputView* htmlOutputView;
@@ -20,6 +21,7 @@ static std::multimap<oak::uuid_t, HTMLOutputWindowController*> Windows;
 @implementation HTMLOutputWindowController
 - (id)initWithRunner:(command::runner_ptr const&)aRunner
 {
+	D(DBF_HTMLOutputWindow, bug("\n"););
 	if(self = [super init])
 	{
 		self.window         = [[NSWindow alloc] initWithContentRect:NSMakeRect(100, 100, 100, 100) styleMask:(NSTitledWindowMask|NSClosableWindowMask|NSResizableWindowMask|NSMiniaturizableWindowMask) backing:NSBackingStoreBuffered defer:NO];
@@ -44,18 +46,25 @@ static std::multimap<oak::uuid_t, HTMLOutputWindowController*> Windows;
 
 + (HTMLOutputWindowController*)HTMLOutputWindowWithRunner:(command::runner_ptr const&)aRunner
 {
+	D(DBF_HTMLOutputWindow, bug("%s\n", to_s(aRunner->uuid()).c_str()););
 	foreach(it, Windows.lower_bound(aRunner->uuid()), Windows.upper_bound(aRunner->uuid()))
 	{
 		HTMLOutputWindowController* controller = it->second;
 		if(![controller running])
+		{
+			D(DBF_HTMLOutputWindow, bug("found existing controller\n"););
 			return [controller setCommandRunner:aRunner], controller;
+		}
 	}
 
 	for(NSWindow* window in [NSApp orderedWindows])
 	{
 		HTMLOutputWindowController* delegate = [window delegate];
-		if(![window isMiniaturized] && [delegate isKindOfClass:[HTMLOutputWindowController class]])
+		if(![window isMiniaturized] && [window isVisible] && [delegate isKindOfClass:[HTMLOutputWindowController class]])
+		{
+			D(DBF_HTMLOutputWindow, bug("found existing window\n"););
 			return [delegate setCommandRunner:aRunner], delegate;
+		}
 	}
 
 	return [[self alloc] initWithRunner:aRunner];
@@ -82,6 +91,11 @@ static std::multimap<oak::uuid_t, HTMLOutputWindowController*> Windows;
 - (BOOL)running
 {
 	return runner->running();
+}
+
+- (BOOL)needsNewWebView
+{
+	return _htmlOutputView.needsNewWebView;
 }
 
 - (void)tearDown
@@ -120,6 +134,7 @@ static std::multimap<oak::uuid_t, HTMLOutputWindowController*> Windows;
 
 - (void)dealloc
 {
+	D(DBF_HTMLOutputWindow, bug("\n"););
 	self.window.delegate = nil;
 }
 

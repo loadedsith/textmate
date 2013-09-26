@@ -575,6 +575,13 @@ namespace
 	[self closeTabsAtIndexes:otherTabs askToSaveChanges:YES createDocumentIfEmpty:YES];
 }
 
+- (IBAction)performCloseTabsToTheRight:(id)sender
+{
+	NSUInteger from = _selectedTabIndex + 1, to = _documents.size();
+	if(from < to)
+		[self closeTabsAtIndexes:[NSIndexSet indexSetWithIndexesInRange:NSMakeRange(from, to - from)] askToSaveChanges:YES createDocumentIfEmpty:YES];
+}
+
 - (BOOL)windowShouldClose:(id)sender
 {
 	[self.htmlOutputView stopLoading];
@@ -817,7 +824,7 @@ namespace
 	}
 	else
 	{
-		NSInteger excessTabs = _documents.size() - self.tabBarView.countOfVisibleTabs;
+		NSInteger excessTabs = _documents.size() - std::max<NSUInteger>(self.tabBarView.countOfVisibleTabs, 8);
 		if(self.tabBarView && excessTabs > 0)
 		{
 			std::set<oak::uuid_t> uuids;
@@ -1372,10 +1379,12 @@ namespace
 
 - (NSIndexSet*)tryObtainIndexSetFrom:(id)sender
 {
-	id res = sender;
-	if([sender respondsToSelector:@selector(representedObject)])
-		res = [sender representedObject];
-	return [res isKindOfClass:[NSIndexSet class]] ? res : nil;
+	id res = [sender respondsToSelector:@selector(representedObject)] ? [sender representedObject] : sender;
+	if([res isKindOfClass:[NSIndexSet class]])
+		return res;
+	else if(!_documents.empty())
+		return [NSIndexSet indexSetWithIndex:self.selectedTabIndex];
+	return nil;
 }
 
 - (void)takeNewTabIndexFrom:(id)sender
@@ -1419,7 +1428,7 @@ namespace
 	}
 }
 
-- (void)toggleSticky:(id)sender
+- (IBAction)toggleSticky:(id)sender
 {
 	if(NSIndexSet* indexSet = [self tryObtainIndexSetFrom:sender])
 	{
@@ -1723,7 +1732,7 @@ namespace
 		}
 		else
 		{
-			if(!self.htmlOutputView)
+			if(!self.htmlOutputView || self.htmlOutputView.needsNewWebView)
 				self.htmlOutputView = [[OakHTMLOutputView alloc] initWithFrame:NSZeroRect];
 			self.layoutView.htmlOutputView = self.htmlOutputView;
 		}
@@ -1767,7 +1776,7 @@ namespace
 	{
 		_runner = aRunner;
 
-		if(!self.htmlOutputWindowController || [self.htmlOutputWindowController running])
+		if(!self.htmlOutputWindowController || [self.htmlOutputWindowController running] || self.htmlOutputWindowController.needsNewWebView)
 				self.htmlOutputWindowController = [HTMLOutputWindowController HTMLOutputWindowWithRunner:_runner];
 		else	[self.htmlOutputWindowController setCommandRunner:_runner];
 	}
@@ -2064,6 +2073,10 @@ namespace
 		[menuItem setTitle:self.window.firstResponder == self.textView ? @"Move Focus to File Browser" : @"Move Focus to Document"];
 	else if([menuItem action] == @selector(takeProjectPathFrom:))
 		[menuItem setState:[self.defaultProjectPath isEqualToString:[menuItem representedObject]] ? NSOnState : NSOffState];
+	else if([menuItem action] == @selector(performCloseOtherTabs:))
+		active = _documents.size() > 1;
+	else if([menuItem action] == @selector(performCloseTabsToTheRight:))
+		active = _selectedTabIndex + 1 < _documents.size();
 
 	SEL tabBarActions[] = { @selector(performCloseTab:), @selector(takeNewTabIndexFrom::), @selector(takeTabsToCloseFrom:), @selector(takeTabsToTearOffFrom:), @selector(toggleSticky:) };
 	if(oak::contains(std::begin(tabBarActions), std::end(tabBarActions), [menuItem action]))

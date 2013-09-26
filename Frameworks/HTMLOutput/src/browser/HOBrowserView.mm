@@ -55,6 +55,11 @@
 	return self;
 }
 
+- (BOOL)needsNewWebView
+{
+	return _webViewDelegateHelper.needsNewWebView;
+}
+
 - (NSString*)projectUUID                       { return _webViewDelegateHelper.projectUUID; }
 - (void)setProjectUUID:(NSString*)aProjectUUID { _webViewDelegateHelper.projectUUID = aProjectUUID; }
 
@@ -66,8 +71,10 @@
 - (void)dealloc
 {
 	[self setUpdatesProgress:NO];
-	[_webView setResourceLoadDelegate:nil];
-	[_webView setFrameLoadDelegate:nil];
+	_webView.frameLoadDelegate      = nil;
+	_webView.UIDelegate             = nil;
+	_webView.resourceLoadDelegate   = nil;
+	_webView.policyDelegate         = nil;
 	[[_webView mainFrame] stopLoading];
 }
 
