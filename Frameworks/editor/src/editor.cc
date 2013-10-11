@@ -2,6 +2,7 @@
 #include "transform.h"
 #include "indent.h"
 #include <bundles/bundles.h>
+#include <command/runner.h>
 #include <text/case.h>
 #include <text/ctype.h>
 #include <text/classification.h>
@@ -44,6 +45,12 @@ namespace ng
 			editor = editors().emplace(document->identifier(), std::make_shared<editor_t>(document)).first;
 		}
 		return editor->second;
+	}
+
+	std::string sanitized_utf8 (std::string str)
+	{
+		str.erase(utf8::remove_malformed(str.begin(), str.end()), str.end());
+		return str;
 	}
 
 	static find::options_t convert (std::map<std::string, std::string> const& options)
@@ -376,16 +383,14 @@ namespace ng
 				__block int status = 0;
 				__block std::string output, error;
 
-				std::string scriptPath = NULL_STR;
-				std::vector<std::string> argv{ "/bin/sh", "-c", cmd };
-				if(cmd.substr(0, 2) == "#!")
-				{
-					argv = { scriptPath = path::temp("snippet_command") };
-					path::set_content(scriptPath, cmd);
-					chmod(scriptPath.c_str(), S_IRWXU);
-				}
+				std::string script = cmd;
+				command::fix_shebang(&script);
 
-				if(io::process_t process = io::spawn(argv, environment))
+				std::string scriptPath = path::temp("snippet_command");
+				path::set_content(scriptPath, script);
+				chmod(scriptPath.c_str(), S_IRWXU);
+
+				if(io::process_t process = io::spawn(std::vector<std::string>{ scriptPath }, environment))
 				{
 					close(process.in);
 
@@ -404,13 +409,10 @@ namespace ng
 					dispatch_release(group);
 				}
 
-				if(scriptPath != NULL_STR)
-					unlink(scriptPath.c_str());
+				unlink(scriptPath.c_str());
 
 				std::string const& res = WIFEXITED(status) && WEXITSTATUS(status) == 0 ? output : error;
-				if(!utf8::is_valid(res.begin(), res.end()))
-					return text::to_hex(res.begin(), res.end());
-				return res;
+				return utf8::is_valid(res.begin(), res.end()) ? res : sanitized_utf8(res);
 			}
 
 		} callback;
@@ -472,6 +474,7 @@ namespace ng
 		std::string str                            = entry->content();
 		std::map<std::string, std::string> options = entry->options();
 		std::replace(str.begin(), str.end(), '\r', '\n');
+		str.erase(utf8::remove_malformed(str.begin(), str.end()), str.end());
 
 		std::string const& indent = options["indent"];
 		bool const complete       = options["complete"] == "1";
@@ -549,7 +552,9 @@ namespace ng
 					str = indent + str;
 				if(complete)
 				{
-					std::string const& rightOfCaret = buffer.substr(index, buffer.eol(line));
+					size_t const rightIndex = selections.last().max().index;
+					size_t const lastLine  = buffer.convert(rightIndex).line;
+					std::string const& rightOfCaret = buffer.substr(rightIndex, buffer.eol(lastLine));
 					if(!text::is_blank(rightOfCaret.data(), rightOfCaret.data() + rightOfCaret.size()))
 						str += '\n';
 				}
@@ -1303,7 +1308,7 @@ namespace ng
 
 	bool editor_t::handle_result (std::string const& uncheckedOut, output::type placement, output_format::type format, output_caret::type outputCaret, text::range_t input_range, std::map<std::string, std::string> environment)
 	{
-		std::string const& out = utf8::is_valid(uncheckedOut.begin(), uncheckedOut.end()) ? uncheckedOut : text::to_hex(uncheckedOut.begin(), uncheckedOut.end());
+		std::string const& out = utf8::is_valid(uncheckedOut.begin(), uncheckedOut.end()) ? uncheckedOut : sanitized_utf8(uncheckedOut);
 
 		range_t range;
 		switch(placement)

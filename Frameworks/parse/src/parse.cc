@@ -169,8 +169,8 @@ namespace parse
 
 	struct ranked_match_t
 	{
-		ranked_match_t (rule_t const* rule, regexp::match_t const& match, size_t rank, bool is_end_pattern = false) : rule(rule), match(match), rank(rank), is_end_pattern(is_end_pattern) { }
-		rule_t const* rule;
+		ranked_match_t (rule_t* rule, regexp::match_t const& match, size_t rank, bool is_end_pattern = false) : rule(rule), match(match), rank(rank), is_end_pattern(is_end_pattern) { }
+		rule_t* rule;
 		regexp::match_t match;
 		size_t rank;
 		bool is_end_pattern;
@@ -274,6 +274,7 @@ namespace parse
 
 	static void collect_injections (stack_ptr const& stack, scope::context_t const& scope, std::vector<rule_t*> const& groups, std::vector<rule_t*>& res)
 	{
+		D(DBF_Parser_Flow, bug("%s\n", to_s(scope).c_str()););
 		for(stack_ptr node = stack; node; node = node->parent)
 		{
 			for(auto const& pair : node->rule->injections)
@@ -290,6 +291,7 @@ namespace parse
 
 			for(auto const& pair : rule->injections)
 			{
+				D(DBF_Parser_Flow, bug("selector: ‘%s’ → %s\n", to_s(pair.first).c_str(), BSTR(pair.first.does_match(scope))););
 				if(pair.first.does_match(scope))
 					collect_rule(pair.second.get(), res, nullptr);
 			}
@@ -444,7 +446,7 @@ namespace parse
 			i = m.match.end();
 			D(DBF_Parser_Flow, bug("match %2zu-%2zu: %s\n", m.match.begin(), m.match.end(), m.rule->scope_string != NULL_STR ? m.rule->scope_string.c_str() : "(untitled)"););
 
-			rule_t const* rule = m.rule;
+			rule_t* rule = m.rule;
 			if(m.is_end_pattern)
 			{
 				if(stack->content_scope_string != NULL_STR)

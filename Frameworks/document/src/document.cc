@@ -1,7 +1,6 @@
 #include "document.h"
 #include "watch.h"
 #include "merge.h"
-#include "reader.h"
 #include "collection.h"
 #include <io/io.h>
 #include <regexp/glob.h>
@@ -12,7 +11,9 @@
 #include <cf/run_loop.h>
 #include <file/type.h>
 #include <file/path_info.h>
+#include <file/reader.h>
 #include <plist/ascii.h>
+#include <encoding/encoding.h>
 #include <selection/selection.h>
 #include <OakSystem/application.h>
 #include <crash/info.h>
@@ -1004,7 +1005,28 @@ namespace document
 			{
 				open_callback_t (document::document_ptr doc, bool async) : _document(doc), _wait(!async) { }
 
-				void select_charset (std::string const& path, io::bytes_ptr content, file::open_context_ptr context)    { context->set_charset(_document->_disk_encoding); }
+				void select_charset (std::string const& path, io::bytes_ptr content, file::open_context_ptr context)
+				{
+					if(_try_disk_encoding)
+					{
+						_try_disk_encoding = false;
+						context->set_charset(_document->_disk_encoding);
+					}
+					else
+					{
+						encoding::classifier_t db;
+						static std::string const kEncodingFrequenciesPath = path::join(path::home(), "Library/Caches/com.macromates.TextMate/EncodingFrequencies.binary");
+						db.load(kEncodingFrequenciesPath);
+
+						std::multimap<double, std::string> probabilities;
+						for(auto const& charset : db.charsets())
+							probabilities.emplace(1 - db.probability(content->begin(), content->end(), charset), charset);
+						if(!probabilities.empty() && probabilities.begin()->first < 1)
+								context->set_charset(probabilities.begin()->second);
+						else	context->set_charset("ISO-8859-1");
+					}
+				}
+
 				void select_line_feeds (std::string const& path, io::bytes_ptr content, file::open_context_ptr context) { context->set_line_feeds(_document->_disk_newlines); }
 				void select_file_type (std::string const& path, io::bytes_ptr content, file::open_context_ptr context)  { context->set_file_type(_document->_file_type); }
 				void show_error (std::string const& path, std::string const& message, oak::uuid_t const& filter)        { fprintf(stderr, "%s: %s\n", path.c_str(), message.c_str()); }
@@ -1057,6 +1079,7 @@ namespace document
 
 			private:
 				document::document_ptr _document;
+				bool _try_disk_encoding = true;
 				bool _wait;
 				cf::run_loop_t _run_loop;
 			};
@@ -1104,88 +1127,28 @@ namespace document
 		return NULL_STR;
 	}
 
-
 	namespace
 	{
-		struct file_reader_t : reader::open_t
+		struct file_reader_t : document::document_t::reader_t
 		{
 			WATCH_LEAKS(file_reader_t);
-			file_reader_t (document_const_ptr const& document) : reader::open_t(document->path()), document(document)
+			file_reader_t (document_const_ptr const& document) : _document(document), _reader(document->path())
 			{
-				// Reading the first 1024 characters to try to determine the file encoding without using
-				// the settings_for_path function.
-				std::string header(1024, ' ');
-				ssize_t len = read(fd, &header.front(), header.size());
-				header.resize(len != -1 ? len : 0);
-
-				// 1. Try to find a bom
-				// 2. If the characters are UTF8 valid we suppose the rest is UTF8
-				// 3. At last, we use settings_for_path to use the specified encoding into the .tm_properties
-				size_t bomSize = 0;
-				std::string charset = encoding::charset_from_bom(&header.front(), &header.front() + header.size(), &bomSize);
-				lseek(fd, bomSize, SEEK_SET);
-				if(charset == kCharsetNoEncoding)
-				{
-					if(utf8::is_valid(&header.front(), &header.front() + header.size()))
-							charset = kCharsetUTF8;
-					else	charset = settings_for_path(document->path(), "attr.file.unknown-encoding " + file::path_attributes(document->path())).get(kSettingsEncodingKey, kCharsetUnknown);
-				}
-				else
-				{
-					_encoding.set_byte_order_mark(true);
-				}
-
-				if(charset != kCharsetUTF8 && charset != kCharsetUnknown && charset != kCharsetNoEncoding)
-				{
-					_encoding.set_charset(charset);
-					converter = iconv_open(kCharsetUTF8.c_str(), charset.c_str());
-				}
-			}
-			
-			~file_reader_t()
-			{
-				if(converter != (iconv_t)(-1))
-					iconv_close(converter);
 			}
 
 			io::bytes_ptr next ()
 			{
-				io::bytes_ptr content = reader::open_t::next();
-				if(converter == (iconv_t)(-1))
-					return content;
-				if(content)
-					read_buffer.append(content->get(), content->size());
-				if(read_buffer.size() == 0)
-					return io::bytes_ptr();
-
-				char* src           = &read_buffer.front();
-				size_t srcBytesLeft = read_buffer.size();
-
-				std::string dest_buffer(srcBytesLeft * 1.5, ' ');
-				char* dst           = &dest_buffer.front();
-				size_t dstBytesLeft = dest_buffer.size();
-
-				size_t rc = iconv(converter, &src, &srcBytesLeft, &dst, &dstBytesLeft);
-				if(rc == (size_t)(-1) && errno != E2BIG && (errno != EINVAL || dstBytesLeft == dest_buffer.size()))
-					return io::bytes_ptr();
-
-				// Erase only the characters that iconv has decoded if the content has ended in the middle
-				// of a multi-byte character. On the next call of next() the remaining characters will be decoded.
-				read_buffer.erase(0, read_buffer.size() - srcBytesLeft);
-				dest_buffer.resize(dest_buffer.size() - dstBytesLeft);
-				return std::make_shared<io::bytes_t>(dest_buffer);
+				return _reader.next();
 			}
 
-			encoding::type const& encoding () const
+			encoding::type encoding () const
 			{
-				return _encoding;
+				return _reader.encoding();
 			}
 
 		private:
-			document_const_ptr document;
-			std::string read_buffer;
-			encoding::type _encoding;
-			iconv_t converter = (iconv_t)-1;
+			document_const_ptr _document;
+			file::reader_t _reader;
 		};
 
 		struct buffer_reader_t : document::document_t::reader_t
