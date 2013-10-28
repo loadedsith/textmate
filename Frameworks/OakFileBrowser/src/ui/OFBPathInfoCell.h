@@ -3,6 +3,8 @@
 
 enum {
 	OFBPathInfoCellHitCloseButton = (1 << 12),
+	OFBPathInfoCellHitOpenItem    = (1 << 13),
+	OFBPathInfoCellHitRevealItem  = (1 << 14),
 };
 
 PUBLIC @interface OFBPathInfoCell : OakImageAndTextCell
@@ -11,7 +13,6 @@ PUBLIC @interface OFBPathInfoCell : OakImageAndTextCell
 @property (nonatomic, assign) BOOL isOpen;
 @property (nonatomic, assign) BOOL isVisible;
 @property (nonatomic, assign) BOOL isLoading;
-@property (nonatomic, assign) BOOL disableHighlight;
 
 - (NSRect)closeButtonRectInFrame:(NSRect)cellFrame;
 @end

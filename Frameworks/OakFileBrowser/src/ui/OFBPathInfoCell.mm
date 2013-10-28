@@ -2,6 +2,7 @@
 #import <OakAppKit/NSColor Additions.h>
 #import <OakAppKit/NSImage Additions.h>
 #import <OakFoundation/OakTimer.h>
+#import <Preferences/Keys.h>
 #import <oak/debug.h>
 #import "../io/FSItem.h"
 #import <OakFoundation/NSString Additions.h>
@@ -96,15 +97,6 @@ static void DrawSpinner (NSRect cellFrame, BOOL isFlipped, NSColor* color, doubl
 	return NSMouseInRect(mousePoint, [self closeButtonRectInFrame:cellFrame], controlView.isFlipped);
 }
 
-- (void)drawInteriorWithFrame:(NSRect)cellFrame inView:(NSView*)controlView
-{
-	BOOL wasHighlighted = self.isHighlighted;
-	if(self.disableHighlight)
-		self.highlighted = NO;
-	[super drawInteriorWithFrame:cellFrame inView:controlView];
-	self.highlighted = wasHighlighted;
-}
-
 - (void)drawWithFrame:(NSRect)cellFrame inView:(NSView*)controlView
 {
 	if([controlView respondsToSelector:@selector(indentationPerLevel)])
@@ -174,7 +166,24 @@ static void DrawSpinner (NSRect cellFrame, BOOL isFlipped, NSColor* color, doubl
 	if(NSMouseInRect(point, [self closeButtonRectInFrame:cellFrame], [controlView isFlipped]))
 		return NSCellHitContentArea | NSCellHitTrackableArea | OFBPathInfoCellHitCloseButton;
 
-	return [super hitTestForEvent:event inRect:cellFrame ofView:controlView];
+	NSUInteger res = [super hitTestForEvent:event inRect:cellFrame ofView:controlView];
+	if(([event type] == NSLeftMouseDown || [event type] == NSLeftMouseUp) && !([event modifierFlags] & (NSShiftKeyMask | NSControlKeyMask)))
+	{
+		if([event modifierFlags] & NSCommandKeyMask)
+		{
+			if(res & OakImageAndTextCellHitImage)
+				res |= OFBPathInfoCellHitRevealItem;
+		}
+		else
+		{
+			BOOL clickTextToOpen = [[NSUserDefaults standardUserDefaults] boolForKey:kUserDefaultsFileBrowserSingleClickToOpenKey];
+			if((res & OakImageAndTextCellHitImage) && !clickTextToOpen)
+				res |= OFBPathInfoCellHitOpenItem;
+			else if((res & OakImageAndTextCellHitText) && clickTextToOpen)
+				res |= OFBPathInfoCellHitOpenItem;
+		}
+	}
+	return res;
 }
 
 - (BOOL)trackMouse:(NSEvent*)theEvent inRect:(NSRect)cellFrame ofView:(NSView*)controlView untilMouseUp:(BOOL)untilMouseUp
