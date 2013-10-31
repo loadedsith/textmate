@@ -55,7 +55,6 @@ namespace
 	{
 		std::string path      = NULL_STR;
 		std::string name      = NULL_STR;
-		std::string extension = NULL_STR;
 		std::string selection = NULL_STR;
 		std::string symbol    = NULL_STR;
 		std::string raw_path  = NULL_STR;
@@ -65,15 +64,19 @@ namespace
 			if(str == NULL_STR || str.empty())
 				return;
 
-			if(regexp::match_t const& m = regexp::search("(?x)  \\A  (?: (?:/(?=.*/))? (.*) / )?  ([^/]*?)  (\\.[^/]+?)?  (?: :([\\d+:-x\\+]*) | @(.*) )?  \\z", str))
+			if(str.find("*") != std::string::npos)
+			{
+				_is_glob = true;
+				_glob = path::glob_t(str);
+			}
+			else if(regexp::match_t const& m = regexp::search("(?x)  \\A  (?: (?:/(?=.*/))? (.*) / )?  ([^/]*?)  (?: :([\\d+:-x\\+]*) | @(.*) )?  \\z", str))
 			{
 				_initialized = true;
 
 				path      = m[1];
 				name      = m.did_match(2) ? m[2] : "";
-				extension = m[3];
-				selection = m[4];
-				symbol    = m[5];
+				selection = m[3];
+				symbol    = m[4];
 
 				raw_path = full_path();
 
@@ -84,13 +87,25 @@ namespace
 
 		std::string full_path () const
 		{
-			return (path != NULL_STR ? path + "/" : "") + name + (extension != NULL_STR ? extension : "");
+			return (path != NULL_STR ? path + "/" : "") + name;
+		}
+
+		bool is_glob () const
+		{
+			return _is_glob;
+		}
+
+		path::glob_t glob () const
+		{
+			return _glob;
 		}
 
 		explicit operator bool () const { return _initialized; }
 
 	private:
 		bool _initialized = false;
+		bool _is_glob = false;
+		path::glob_t _glob = "*";
 	};
 
 	struct document_record_t
@@ -121,6 +136,67 @@ namespace
 		NSNumber* tableview_item = nil;
 		OakFileIconImage* image = nil;
 	};
+
+	inline void rank_record (document_record_t& record, filter_string_t const& filter, std::string const& basePath, path::glob_list_t const& glob, std::vector<std::string> const& bindings)
+	{
+		record.matched = false;
+		if(glob.exclude(record.full_path))
+			return;
+
+		record.cover.clear();
+		record.display         = record.name;
+		record.display_parents = 0;
+
+		if(!filter)
+		{
+			record.matched = true;
+			record.rank    = record.place_last ? 1 : 0;
+			return;
+		}
+
+		double path_rank = 1;
+		std::vector<std::pair<size_t, size_t>> path_cover;
+		if(filter.path != NULL_STR)
+		{
+			std::string prefix = (record.full_path == NULL_STR) ? "" : path::relative_to(path::parent(record.full_path), basePath);
+			if(double rank = oak::rank(filter.path, prefix, &path_cover))
+			{
+				path_rank = 1 - rank;
+				record.display = (record.full_path == NULL_STR) ? "" : prefix + (prefix.empty() ? "" : "/");
+			}
+			else
+			{
+				return;
+			}
+		}
+
+		if(double rank = oak::rank(filter.name, record.name, &record.cover))
+		{
+			record.matched = true;
+
+			if(filter.path != NULL_STR)
+			{
+				for(auto pair : record.cover)
+					path_cover.push_back(std::make_pair(pair.first + record.display.size(), pair.second + record.display.size()));
+				record.display = record.display + record.name;
+				record.cover.swap(path_cover);
+			}
+
+			size_t bindingIndex = std::find(bindings.begin(), bindings.end(), record.full_path) - bindings.begin();
+			if((filter.selection != NULL_STR || filter.symbol != NULL_STR) && record.place_last && filter.full_path().empty())
+				record.rank = 0;
+			else if(!filter.raw_path.empty() && path::is_child(filter.raw_path, record.full_path))
+				record.rank = 0;
+			else if(record.place_last)
+				record.rank = 1;
+			else if(bindingIndex != bindings.size())
+				record.rank = -1.0 * (bindings.size() - bindingIndex);
+			else if(filter.name.empty())
+				record.rank = path_rank;
+			else
+				record.rank = path_rank * (1 - rank);
+		}
+	}
 }
 
 static path::glob_list_t globs_for_path (std::string const& path)
@@ -177,6 +253,7 @@ static path::glob_list_t globs_for_path (std::string const& path)
 {
 	if((self = [super init]))
 	{
+		[self.window setContentBorderThickness:57 forEdge:NSMaxYEdge];
 		self.tableView.allowsMultipleSelection = YES;
 
 		NSCell* cell = [OFBPathInfoCell new];
@@ -328,102 +405,61 @@ static path::glob_list_t globs_for_path (std::string const& path)
 	[self updateRecordsFrom:firstDirty];
 }
 
-inline void rank_record (document_record_t& record, filter_string_t const& filter, std::string const& basePath, path::glob_list_t const& glob, std::vector<std::string> const& bindings)
-{
-	record.matched = false;
-	if(glob.exclude(record.full_path))
-		return;
-
-	if(filter.extension != NULL_STR)
-	{
-		// Check if filter string’s extension is a subset and that the
-		// subset match is followed by a period or is end of string.
-		std::string::size_type ext = record.name.find(filter.extension);
-		if(ext == std::string::npos || ext + filter.extension.size() < record.name.size() && record.name[ext + filter.extension.size()] != '.')
-			return;
-	}
-
-	record.cover.clear();
-	record.display         = record.name;
-	record.display_parents = 0;
-
-	if(!filter)
-	{
-		record.matched = true;
-		record.rank    = record.place_last ? 1 : 0;
-		return;
-	}
-
-	double path_rank = 1;
-	std::vector<std::pair<size_t, size_t>> path_cover;
-	if(filter.path != NULL_STR)
-	{
-		std::string prefix = (record.full_path == NULL_STR) ? "" : path::relative_to(path::parent(record.full_path), basePath);
-		if(double rank = oak::rank(filter.path, prefix, &path_cover))
-		{
-			path_rank = 1 - rank;
-			record.display = (record.full_path == NULL_STR) ? "" : prefix + (prefix.empty() ? "" : "/");
-		}
-		else
-		{
-			return;
-		}
-	}
-
-	if(double rank = oak::rank(filter.name, record.name, &record.cover))
-	{
-		record.matched = true;
-
-		if(filter.path != NULL_STR)
-		{
-			for(auto pair : record.cover)
-				path_cover.push_back(std::make_pair(pair.first + record.display.size(), pair.second + record.display.size()));
-			record.display = record.display + record.name;
-			record.cover.swap(path_cover);
-		}
-
-		size_t bindingIndex = std::find(bindings.begin(), bindings.end(), record.full_path) - bindings.begin();
-		if((filter.selection != NULL_STR || filter.symbol != NULL_STR) && record.place_last && filter.full_path().empty())
-			record.rank = 0;
-		else if(!filter.raw_path.empty() && path::is_child(filter.raw_path, record.full_path))
-			record.rank = 0;
-		else if(record.place_last)
-			record.rank = 1;
-		else if(bindingIndex != bindings.size())
-			record.rank = -1.0 * (bindings.size() - bindingIndex);
-		else if(filter.name.empty())
-			record.rank = path_rank;
-		else
-			record.rank = path_rank * (1 - rank);
-	}
-}
-
 - (void)updateRecordsFrom:(NSUInteger)first
 {
 	filter_string_t filter(to_s(self.filterString));
-	path::glob_list_t glob;
 	std::string const basePath = to_s(_path);
-
-	std::vector<std::string> bindings;
-	for(NSString* str in [[OakAbbreviations abbreviationsForName:@"OakFileChooserBindings"] stringsForAbbreviation:[NSString stringWithCxxString:filter.full_path()]])
-		bindings.push_back(to_s(str));
-
-	size_t const count  = _records.size() - first;
-	size_t const stride = 256;
-	dispatch_apply(count / stride, dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^(size_t n){
-		for(size_t i = n*stride; i < (n+1)*stride; ++i)
-			rank_record(_records[first + i], filter, basePath, glob, bindings);
-	});
-   for(size_t i = count - (count % stride); i < count; ++i)
-		rank_record(_records[first + i], filter, basePath, glob, bindings);
-
 	std::vector<document_record_t const*> include;
-	for(auto const& record : _records)
+
+	if(filter.is_glob())
 	{
-		if(record.matched)
-			include.push_back(&record);
+		for(size_t i = first; i < _records.size(); ++i)
+		{
+			auto& record = _records[i];
+			record.cover.clear();
+			record.display_parents = 0;
+
+			for(auto const& str : { record.name, path::relative_to(record.full_path, basePath), record.full_path })
+			{
+				if(record.matched = filter.glob().does_match(str))
+				{
+					record.display = str;
+					break;
+				}
+			}
+		}
+
+		for(auto const& record : _records)
+		{
+			if(record.matched)
+				include.push_back(&record);
+		}
+		std::sort(include.begin(), include.end(), [](document_record_t const* lhs, document_record_t const* rhs){ return lhs->name < rhs->name; });
 	}
-	std::sort(include.begin(), include.end(), [](document_record_t const* lhs, document_record_t const* rhs){ return (lhs->rank < rhs->rank) || ((lhs->rank == rhs->rank) && ((lhs->lru_rank < rhs->lru_rank) || (lhs->lru_rank == rhs->lru_rank && lhs->name < rhs->name))); });
+	else
+	{
+		path::glob_list_t glob;
+
+		std::vector<std::string> bindings;
+		for(NSString* str in [[OakAbbreviations abbreviationsForName:@"OakFileChooserBindings"] stringsForAbbreviation:[NSString stringWithCxxString:filter.full_path()]])
+			bindings.push_back(to_s(str));
+
+		size_t const count  = _records.size() - first;
+		size_t const stride = 256;
+		dispatch_apply(count / stride, dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^(size_t n){
+			for(size_t i = n*stride; i < (n+1)*stride; ++i)
+				rank_record(_records[first + i], filter, basePath, glob, bindings);
+		});
+	   for(size_t i = count - (count % stride); i < count; ++i)
+			rank_record(_records[first + i], filter, basePath, glob, bindings);
+
+		for(auto const& record : _records)
+		{
+			if(record.matched)
+				include.push_back(&record);
+		}
+		std::sort(include.begin(), include.end(), [](document_record_t const* lhs, document_record_t const* rhs){ return (lhs->rank < rhs->rank) || ((lhs->rank == rhs->rank) && ((lhs->lru_rank < rhs->lru_rank) || (lhs->lru_rank == rhs->lru_rank && lhs->name < rhs->name))); });
+	}
 
 	NSMutableArray* array = [NSMutableArray arrayWithCapacity:include.size()];
 	for(auto record : include)
@@ -589,19 +625,18 @@ inline void rank_record (document_record_t& record, filter_string_t const& filte
 		NSNumber* index = self.items[self.tableView.selectedRow];
 		document_record_t const& record = _records[index.unsignedIntValue];
 
-		std::string prefix = record.full_path;
-		if(prefix != NULL_STR)
+		std::string path = record.full_path;
+		if(path != NULL_STR)
 		{
-			prefix = path::with_tilde(prefix.substr(0, prefix.size() - record.display.size()));
-			if(prefix.size() && prefix[prefix.size()-1] != '/')
-				prefix += '/';
+			if(path.find(to_s(self.path)) == 0)
+					path = path::relative_to(path, to_s(self.path));
+			else	path = path::with_tilde(path);
 		}
 		else // untitled file
 		{
-			prefix = "";
+			path = record.display;
 		}
 
-		std::string path = prefix + record.display;
 		[self.statusTextField.cell setLineBreakMode:NSLineBreakByTruncatingHead];
 		self.statusTextField.stringValue = [NSString stringWithCxxString:path];
 	}

@@ -266,8 +266,8 @@ void theme_t::shared_styles_t::setup_styles ()
 
 	// We assume that the first style is the unscoped root style
 
-	_foreground     = _styles.empty() ? CGColorPtr(CGColorCreate(_color_space, (CGFloat[4]){ 1, 1, 1, 1 }), CGColorRelease) : OakColorCreateFromThemeColor(_styles[0].foreground, _color_space);
-	_background     = _styles.empty() ? CGColorPtr(CGColorCreate(_color_space, (CGFloat[4]){ 0, 0, 0, 1 }), CGColorRelease) : OakColorCreateFromThemeColor(_styles[0].background, _color_space);
+	_foreground     = (_styles.empty() ? CGColorPtr() : OakColorCreateFromThemeColor(_styles[0].foreground, _color_space)) ?: CGColorPtr(CGColorCreate(_color_space, (CGFloat[4]){ 1, 1, 1, 1 }), CGColorRelease);
+	_background     = (_styles.empty() ? CGColorPtr() : OakColorCreateFromThemeColor(_styles[0].background, _color_space)) ?: CGColorPtr(CGColorCreate(_color_space, (CGFloat[4]){ 0, 0, 0, 1 }), CGColorRelease);
 	_is_dark        = color_is_dark(_background.get());
 	_is_transparent = CGColorGetAlpha(_background.get()) < 1;
 
@@ -417,11 +417,14 @@ static theme_t::color_info_t read_color (std::string const& str_color )
 	enum { R, G, B, A };
 	unsigned int col[4] = { 0x00, 0x00, 0x00, 0xFF } ;
 	
-	int res = sscanf(str_color.c_str(), "#%02x%02x%02x%02x", &col[R], &col[G], &col[B], &col[A]);
-	if(res < 3) // R G B was not parsed, or color is 100% transparent
-		return theme_t::color_info_t::color_info_t(); // color is not set
+	if(3 <= sscanf(str_color.c_str(), "#%02x%02x%02x%02x", &col[R], &col[G], &col[B], &col[A]))
+		return theme_t::color_info_t::color_info_t(col[R]/255.0, col[G]/255.0, col[B]/255.0, col[A]/255.0);
 
-	return theme_t::color_info_t::color_info_t(col[R]/255.0, col[G]/255.0, col[B]/255.0, col[A]/255.0);
+	col[A] = 0xF;
+	if(3 <= sscanf(str_color.c_str(), "#%1x%1x%1x%1x", &col[R], &col[G], &col[B], &col[A]))
+		return theme_t::color_info_t::color_info_t(col[R]/15.0, col[G]/15.0, col[B]/15.0, col[A]/15.0);
+
+	return theme_t::color_info_t::color_info_t(); // color is not set
 }
 
 static theme_t::color_info_t blend (theme_t::color_info_t const& lhs, theme_t::color_info_t const& rhs)
