@@ -156,6 +156,11 @@ gutter_styles_t::~gutter_styles_t ()
 	}
 }
 
+bool gutter_styles_t::is_transparent () const
+{
+	return background && CGColorGetAlpha(background) < 1;
+}
+
 // ===========
 // = theme_t =
 // ===========
