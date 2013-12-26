@@ -68,8 +68,8 @@ namespace ng
 		void update_metrics (CGRect visibleRect);
 		void draw (ng::context_t const& context, CGRect rectangle, bool isFlipped, bool showInvisibles, ng::ranges_t const& selection, ng::ranges_t const& highlightRanges = ng::ranges_t(), bool drawBackground = true);
 		ng::index_t index_at_point (CGPoint point) const;
-		CGRect rect_at_index (ng::index_t const& index) const;
-		CGRect rect_for_range (size_t first, size_t last) const;
+		CGRect rect_at_index (ng::index_t const& index, bool bol_as_eol = false) const;
+		CGRect rect_for_range (size_t first, size_t last, bool bol_as_eol = false) const;
 		std::vector<CGRect> rects_for_ranges (ng::ranges_t const& ranges, kRectsIncludeMode mode = kRectsIncludeAll) const;
 
 		CGFloat width () const;
@@ -88,6 +88,9 @@ namespace ng
 		ng::index_t page_up_for (index_t const& index) const;
 		ng::index_t page_down_for (index_t const& index) const;
 
+		size_t softline_for_index (ng::index_t const& index) const;
+		ng::range_t range_for_softline (size_t softline) const;
+
 		// ===================
 		// = Folding Support =
 		// ===================
@@ -96,10 +99,12 @@ namespace ng
 		bool is_line_fold_start_marker (size_t n) const;
 		bool is_line_fold_stop_marker (size_t n) const;
 		void fold (size_t from, size_t to);
+		void unfold (size_t from, size_t to);
 		void remove_enclosing_folds (size_t from, size_t to);
 		void toggle_fold_at_line (size_t n, bool recursive);
 		void toggle_all_folds_at_level (size_t level);
 		std::string folded_as_string () const;
+		ng::range_t folded_range_at_point (CGPoint point) const;
 
 		// =======================
 		// = Gutter view support =
@@ -118,15 +123,16 @@ namespace ng
 	private:
 		struct row_key_t
 		{
-			row_key_t (size_t length = 0, CGFloat height = 0, CGFloat width = 0) : _length(length), _height(height), _width(width) { }
+			row_key_t (size_t length = 0, CGFloat height = 0, CGFloat width = 0, size_t softlines = 0) : _length(length), _height(height), _width(width), _softlines(softlines) { }
 
-			bool operator==     (row_key_t const& rhs) const { return _length == rhs._length && _height == rhs._height && _width == rhs._width; }
-			row_key_t operator+ (row_key_t const& rhs) const { return row_key_t(_length + rhs._length, _height + rhs._height, std::max(_width, rhs._width)); }
-			row_key_t operator- (row_key_t const& rhs) const { return row_key_t(_length - rhs._length, _height - rhs._height, std::min(_width, rhs._width)); }
+			bool operator==     (row_key_t const& rhs) const { return _length == rhs._length && _height == rhs._height && _width == rhs._width && _softlines == rhs._softlines; }
+			row_key_t operator+ (row_key_t const& rhs) const { return row_key_t(_length + rhs._length, _height + rhs._height, std::max(_width, rhs._width), _softlines + rhs._softlines); }
+			row_key_t operator- (row_key_t const& rhs) const { return row_key_t(_length - rhs._length, _height - rhs._height, std::min(_width, rhs._width), _softlines - rhs._softlines); }
 
 			size_t _length;
 			CGFloat _height;
 			CGFloat _width;
+			size_t _softlines;
 		};
 
 		typedef oak::basic_tree_t<row_key_t, paragraph_t> row_tree_t;
@@ -155,6 +161,7 @@ namespace ng
 
 		static int row_y_comp (CGFloat y, row_key_t const& offset, row_key_t const& node)       { return y < offset._height ? -1 : (y == offset._height ? 0 : +1); }
 		static int row_offset_comp (size_t i, row_key_t const& offset, row_key_t const& node)   { return i < offset._length ? -1 : (i == offset._length ? 0 : +1); }
+		static int row_softline_comp (size_t softline, row_key_t const& offset, row_key_t const& node)   { return softline < offset._softlines ? -1 : (softline == offset._softlines ? 0 : +1); }
 
 		static std::string row_to_s (row_tree_t::value_type const& info);
 

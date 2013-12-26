@@ -635,6 +635,7 @@ def deploy(target)
 
   res << "build #{target[:name]}/dsym:   phony #{dsym}\n"
   res << "build #{target[:name]}/tbz:    phony #{tbz}\n"
+  res << "build #{target[:name]}/upload: phony #{meta}.upload\n"
   res << "build #{target[:name]}/deploy: phony #{meta}.deploy\n"
 end
 
@@ -643,7 +644,7 @@ def all_targets(buildfile, builddir)
   return res unless File.exists? buildfile
 
   Dir.chdir(File.dirname(buildfile)) do
-    targets = %x{ ${TM_NINJA:-ninja} -f #{[ buildfile ].shelljoin } -t targets all }
+    targets = %x{ ${TM_NINJA:-ninja} -f #{buildfile.shellescape} -t targets all }
     return nil if $? != 0
     targets.each do |line|
       if line =~ /.*(?=:(?! phony))/
@@ -908,7 +909,7 @@ rule run_application
   description = Run ‘$in’…
 
 rule sign_executable
-  command = codesign --deep -fs "$identity" $in && touch $out
+  command = bin/sign_app "$identity" $in && touch $out
   description = Sign ‘$in’…
 
 rule tbz_archive
@@ -917,7 +918,7 @@ rule tbz_archive
   description = Archive ‘$in’…
 
 rule upload
-  command = bin/upload -k$upload_keyfile -d$upload_destination -m '{"version":"$APP_VERSION","revision":"$APP_REVISION"}' $in > $out~ && mv $out~ $out
+  command = bin/upload -k$upload_keyfile -d$upload_destination -t'v$APP_VERSION' -m'{"version":"$APP_VERSION","revision":"$APP_REVISION"}' $in > $out~ && mv $out~ $out
   generator = true
   description = Upload ‘$in’…
 

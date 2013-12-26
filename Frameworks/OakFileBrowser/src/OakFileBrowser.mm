@@ -71,19 +71,26 @@ static NSImage* IconImage (NSURL* url, NSSize size = NSMakeSize(16, 16))
 	return NO;
 }
 
+- (NSSet*)myAccessibilityAttributeNames
+{
+	static NSSet* set = [NSSet setWithArray:@[
+		NSAccessibilityRoleAttribute,
+		NSAccessibilityDescriptionAttribute,
+	]];
+	return set;
+}
+
 - (NSArray*)accessibilityAttributeNames
 {
-	static NSArray* attributes = nil;
-	if(!attributes)
-	{
-		NSSet* set = [NSSet setWithArray:[super accessibilityAttributeNames]];
-		set = [set setByAddingObjectsFromArray:@[
-			NSAccessibilityRoleAttribute,
-			NSAccessibilityDescriptionAttribute,
-		]];
-		attributes = [set allObjects];
-	}
+	static NSArray* attributes = [[[self myAccessibilityAttributeNames] setByAddingObjectsFromArray:[super accessibilityAttributeNames]] allObjects];
 	return attributes;
+}
+
+- (BOOL)accessibilityIsAttributeSettable:(NSString*)attribute
+{
+	if([[self myAccessibilityAttributeNames] containsObject:attribute])
+		return NO;
+	return [super accessibilityIsAttributeSettable:attribute];
 }
 
 - (id)accessibilityAttributeValue:(NSString*)attribute
@@ -308,7 +315,7 @@ static NSMutableSet* SymmetricDifference (NSMutableSet* aSet, NSMutableSet* anot
 	NSMenu* folderPopUpMenu = _headerView.folderPopUpButton.menu;
 	[folderPopUpMenu removeAllItems];
 
-	NSMenuItem* menuItem = [folderPopUpMenu addItemWithTitle:_outlineViewDelegate.dataSource.rootItem.name action:@selector(takeURLFrom:) keyEquivalent:@""];
+	NSMenuItem* menuItem = [folderPopUpMenu addItemWithTitle:(_outlineViewDelegate.dataSource.rootItem.name ?: @"") action:@selector(takeURLFrom:) keyEquivalent:@""];
 	menuItem.image = _outlineViewDelegate.dataSource.rootItem.icon;
 	menuItem.image.size = NSMakeSize(16, 16);
 	menuItem.target = self;
@@ -614,7 +621,7 @@ static NSMutableSet* SymmetricDifference (NSMutableSet* aSet, NSMutableSet* anot
 
 - (id)validRequestorForSendType:(NSString*)sendType returnType:(NSString*)returnType
 {
-	if(returnType == nil && ([sendType isEqualToString:NSFilenamesPboardType] || [sendType isEqualToString:NSStringPboardType]))
+	if(returnType == nil && [sendType isEqualToString:NSFilenamesPboardType])
 			return self;
 	else	return [super validRequestorForSendType:sendType returnType:returnType];
 }
@@ -1232,7 +1239,7 @@ static NSMutableSet* SymmetricDifference (NSMutableSet* aSet, NSMutableSet* anot
 	else if([item action] == @selector(editSelectedEntries:))
 		res = selectedFiles == 1;
 	else if([item action] == @selector(toggleShowInvisibles:))
-		[item setState:self.showExcludedItems ? NSOnState : NSOffState];
+		[item setTitle:self.showExcludedItems ? @"Hide Invisible Files" : @"Show Invisible Files"];
 
 	NSString* quickLookTitle = [QLPreviewPanel sharedPreviewPanelExists] && [[QLPreviewPanel sharedPreviewPanel] isVisible] ? @"Close Quick Look" : @"Quick Look%@";
 

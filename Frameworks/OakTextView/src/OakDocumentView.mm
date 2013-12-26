@@ -10,6 +10,7 @@
 #import <bundles/bundles.h>
 #import <OakFilterList/SymbolChooser.h>
 #import <OakFoundation/NSString Additions.h>
+#import <OakFoundation/NSArray Additions.h>
 #import <OakAppKit/OakAppKit.h>
 #import <OakAppKit/NSColor Additions.h>
 #import <OakAppKit/NSImage Additions.h>
@@ -244,7 +245,7 @@ private:
 	if(NSFont* newFont = [sender convertFont:textView.font])
 	{
 		settings_t::set(kSettingsFontNameKey, to_s([newFont fontName]));
-		settings_t::set(kSettingsFontSizeKey, (size_t)[newFont pointSize]);
+		settings_t::set(kSettingsFontSizeKey, [newFont pointSize]);
 		[self setFont:newFont];
 	}
 }
@@ -394,7 +395,7 @@ private:
 - (BOOL)validateMenuItem:(NSMenuItem*)aMenuItem
 {
 	if([aMenuItem action] == @selector(toggleLineNumbers:))
-		[aMenuItem setState:[gutterView visibilityForColumnWithIdentifier:GVLineNumbersColumnIdentifier] ? NSOffState : NSOnState];
+		[aMenuItem setTitle:[gutterView visibilityForColumnWithIdentifier:GVLineNumbersColumnIdentifier] ? @"Hide Line Numbers" : @"Show Line Numbers"];
 	else if([aMenuItem action] == @selector(takeThemeUUIDFrom:))
 		[aMenuItem setState:[textView theme]->uuid() == [[aMenuItem representedObject] UTF8String] ? NSOnState : NSOffState];
 	else if([aMenuItem action] == @selector(takeTabSizeFrom:))
@@ -425,6 +426,14 @@ private:
 			bool selectedGrammar = document && document->file_type() == bundleItem->value_for_field(bundles::kFieldGrammarScope);
 			[aMenuItem setState:selectedGrammar ? NSOnState : NSOffState];
 		}
+	}
+	else if([aMenuItem action] == @selector(toggleCurrentBookmark:))
+	{
+		text::selection_t sel([textView.selectionString UTF8String]);
+		size_t lineNumber = sel.last().max().line;
+
+		ng::buffer_t const& buf = document->buffer();
+		[aMenuItem setTitle:buf.get_marks(buf.begin(lineNumber), buf.eol(lineNumber), kBookmarkType).empty() ? @"Set Bookmark" : @"Remove Bookmark"];
 	}
 	return YES;
 }
@@ -700,19 +709,19 @@ static std::string const kSearchmarkType = "search";
 - (NSImage*)imageForState:(NSUInteger)state forColumnWithIdentifier:(id)identifier
 {
 	NSArray* array = _gutterImages[identifier];
-	return array && state < [array count] && array[state] != [NSNull null] ? array[state] : nil;
+	return [array safeObjectAtIndex:state];
 }
 
 - (NSImage*)hoverImageForState:(NSUInteger)state forColumnWithIdentifier:(id)identifier
 {
 	NSArray* array = _gutterHoverImages[identifier];
-	return array && state < [array count] && array[state] != [NSNull null] ? array[state] : nil;
+	return [array safeObjectAtIndex:state];
 }
 
 - (NSImage*)pressedImageForState:(NSUInteger)state forColumnWithIdentifier:(id)identifier
 {
 	NSArray* array = _gutterPressedImages[identifier];
-	return array && state < [array count] && array[state] != [NSNull null] ? array[state] : nil;
+	return [array safeObjectAtIndex:state];
 }
 
 // =============================
@@ -831,19 +840,26 @@ static std::string const kSearchmarkType = "search";
 	return NO;
 }
 
+- (NSSet*)myAccessibilityAttributeNames
+{
+	static NSSet* set = [NSSet setWithArray:@[
+		NSAccessibilityRoleAttribute,
+		NSAccessibilityDescriptionAttribute,
+	]];
+	return set;
+}
+
 - (NSArray*)accessibilityAttributeNames
 {
-	static NSArray* attributes = nil;
-	if(!attributes)
-	{
-		NSSet* set = [NSSet setWithArray:[super accessibilityAttributeNames]];
-		set = [set setByAddingObjectsFromArray:@[
-			NSAccessibilityRoleAttribute,
-			NSAccessibilityDescriptionAttribute,
-		]];
-		attributes = [set allObjects];
-	}
+	static NSArray* attributes = [[[self myAccessibilityAttributeNames] setByAddingObjectsFromArray:[super accessibilityAttributeNames]] allObjects];
 	return attributes;
+}
+
+- (BOOL)accessibilityIsAttributeSettable:(NSString*)attribute
+{
+	if([[self myAccessibilityAttributeNames] containsObject:attribute])
+		return NO;
+	return [super accessibilityIsAttributeSettable:attribute];
 }
 
 - (id)accessibilityAttributeValue:(NSString*)attribute

@@ -293,18 +293,20 @@ namespace ng
 	// = Measurements =
 	// ================
 
-	CGRect layout_t::rect_at_index (ng::index_t const& index) const
+	CGRect layout_t::rect_at_index (ng::index_t const& index, bool bol_as_eol) const
 	{
 		auto row = row_for_offset(index.index);
-		return row->value.rect_at_index(index, *_metrics, _buffer, row->offset._length, CGPointMake(_margin.left, _margin.top + row->offset._height));
+		if(bol_as_eol && index.index == row->offset._length && row != _rows.begin())
+			--row;
+		return row->value.rect_at_index(index, *_metrics, _buffer, row->offset._length, CGPointMake(_margin.left, _margin.top + row->offset._height), bol_as_eol);
 	}
 
-	CGRect layout_t::rect_for_range (size_t first, size_t last) const
+	CGRect layout_t::rect_for_range (size_t first, size_t last, bool bol_as_eol) const
 	{
 		ASSERT_LE(first, last);
 
 		auto r1 = rect_at_index(first);
-		auto r2 = rect_at_index(last);
+		auto r2 = rect_at_index(last, bol_as_eol);
 		auto res = CGRectZero;
 
 		if(CGRectGetMinY(r1) == CGRectGetMinY(r2) && CGRectGetHeight(r1) == CGRectGetHeight(r2))
@@ -416,6 +418,7 @@ namespace ng
 		rowIter->key._length = rowIter->value.length();
 		rowIter->key._width  = rowIter->value.width();
 		rowIter->key._height = rowIter->value.height(*_metrics);
+		rowIter->key._softlines = rowIter->value.softline_count(*_metrics);
 
 		_rows.update_key(rowIter);
 		return oldHeight != rowIter->key._height;
@@ -788,6 +791,20 @@ namespace ng
 		return advance(_buffer, bolPageDown.index, count_columns(_buffer, bol.index, index.index) + index.carry, eolPageDown.index);
 	}
 
+	size_t layout_t::softline_for_index (ng::index_t const& index) const
+	{
+		auto row = row_for_offset(index.index);
+		return row->value.softline_for_index(index.index, _buffer, row->offset._length, row->offset._softlines, *_metrics);
+	}
+
+	ng::range_t layout_t::range_for_softline (size_t softline) const
+	{
+		auto row = _rows.upper_bound(softline, &row_softline_comp);
+		if(row != _rows.begin())
+			--row;
+		return row->value.range_for_softline(softline, _buffer, row->offset._length, row->offset._softlines, *_metrics);
+	}
+
 	// =============
 	// = Rendering =
 	// =============
@@ -906,6 +923,12 @@ namespace ng
 		did_fold(from, to);
 	}
 
+	void layout_t::unfold (size_t from, size_t to)
+	{
+		if(_folds->unfold(from, to))
+			did_fold(from, to);
+	}
+
 	void layout_t::remove_enclosing_folds (size_t from, size_t to)
 	{
 		for(auto const& range : _folds->remove_enclosing(from, to))
@@ -923,6 +946,21 @@ namespace ng
 	{
 		for(auto const& range : _folds->toggle_all_at_level(level))
 			did_fold(range.first, range.second);
+	}
+
+	ng::range_t layout_t::folded_range_at_point (CGPoint point) const
+	{
+		CGFloat clickedY = point.y - _margin.top;
+		auto rowIter = _rows.upper_bound(clickedY, &row_y_comp);
+		if(rowIter != _rows.begin())
+			--rowIter;
+
+		if(clickedY < rowIter->offset._height)
+			return {};
+		else if(clickedY < rowIter->offset._height + rowIter->key._height)
+			return rowIter->value.folded_range_at_point(point, *_metrics, _buffer, rowIter->offset._length, CGPointMake(_margin.left, _margin.top + rowIter->offset._height));
+		else
+			return {};
 	}
 
 	// =================
