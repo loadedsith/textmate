@@ -34,6 +34,7 @@
 namespace find_tags { enum { in_document = 1, in_selection, in_project, in_folder }; } // From AppController.h
 
 static NSString* const kUserDefaultsFindInSelectionByDefault = @"findInSelectionByDefault";
+static NSString* const kUserDefaultsDisableTabReordering = @"disableTabReordering";
 static NSString* const OakDocumentPboardType = @"OakDocumentPboardType"; // drag’n’drop of tabs
 static BOOL IsInShouldTerminateEventLoop = NO;
 
@@ -63,6 +64,7 @@ static BOOL IsInShouldTerminateEventLoop = NO;
 @property (nonatomic) OakFileBrowser*             fileBrowser;
 
 @property (nonatomic) BOOL                        disableFileBrowserWindowResize;
+@property (nonatomic) BOOL                        autoRevealFile;
 @property (nonatomic) NSRect                      oldWindowFrame;
 @property (nonatomic) NSRect                      newWindowFrame;
 
@@ -198,17 +200,31 @@ namespace
 		return doc && !doc->is_modified() && !doc->is_on_disk() && doc->path() == NULL_STR && doc->buffer().empty();
 	}
 
-	static size_t merge_documents_splitting_at (std::vector<document::document_ptr> const& oldDocuments, std::vector<document::document_ptr> const& newDocuments, size_t splitAt, std::vector<document::document_ptr>& out)
+	static size_t merge_documents_splitting_at (std::vector<document::document_ptr> const& oldDocuments, std::vector<document::document_ptr> const& newDocuments, size_t splitAt, std::vector<document::document_ptr>& out, bool disableTabReordering = false)
 	{
+		if(newDocuments.empty())
+		{
+			std::copy(oldDocuments.begin(), oldDocuments.end(), back_inserter(out));
+			return std::min(splitAt, out.size());
+		}
+
+		splitAt = std::min(splitAt, oldDocuments.size());
+		if(disableTabReordering)
+		{
+			auto iter = std::find(oldDocuments.begin(), oldDocuments.end(), newDocuments.front());
+			if(iter != oldDocuments.end())
+				splitAt = iter - oldDocuments.begin();
+		}
+
 		std::set<oak::uuid_t> uuids;
 		std::transform(newDocuments.begin(), newDocuments.end(), inserter(uuids, uuids.end()), [](document::document_ptr const& doc){ return doc->identifier(); });
 
-		splitAt = std::min(splitAt, oldDocuments.size());
 		std::copy_if(oldDocuments.begin(), oldDocuments.begin() + splitAt, back_inserter(out), [&uuids](document::document_ptr const& doc){ return uuids.find(doc->identifier()) == uuids.end(); });
 		std::copy(newDocuments.begin(), newDocuments.end(), back_inserter(out));	
-		size_t res = out.empty() ? 0 : out.size() - 1;
 		std::copy_if(oldDocuments.begin() + splitAt, oldDocuments.end(), back_inserter(out), [&uuids](document::document_ptr const& doc){ return uuids.find(doc->identifier()) == uuids.end(); });
-		return res;
+
+		auto iter = std::find(out.begin(), out.end(), newDocuments.front());
+		return iter - out.begin();
 	}
 
 	static std::vector<document::document_ptr> make_vector (document::document_ptr const& document)
@@ -353,6 +369,7 @@ namespace
 {
 	self.htmlOutputInWindow = [[[NSUserDefaults standardUserDefaults] objectForKey:kUserDefaultsHTMLOutputPlacementKey] isEqualToString:@"window"];
 	self.disableFileBrowserWindowResize = [[NSUserDefaults standardUserDefaults] boolForKey:kUserDefaultsDisableFileBrowserWindowResizeKey];
+	self.autoRevealFile = [[NSUserDefaults standardUserDefaults] boolForKey:kUserDefaultsAutoRevealFileKey];
 
 	if(self.layoutView.fileBrowserOnRight != [[[NSUserDefaults standardUserDefaults] objectForKey:kUserDefaultsFileBrowserPlacementKey] isEqualToString:@"right"])
 	{
@@ -760,6 +777,11 @@ namespace
 	}
 }
 
+- (BOOL)disableTabReordering
+{
+	return [[NSUserDefaults standardUserDefaults] boolForKey:kUserDefaultsDisableTabReordering];;
+}
+
 - (void)openItems:(NSArray*)items closingOtherTabs:(BOOL)closeOtherTabsFlag
 {
 	std::vector<document::document_ptr> documents;
@@ -800,7 +822,7 @@ namespace
 	else	++split;
 
 	std::vector<document::document_ptr> newDocuments;
-	split = merge_documents_splitting_at(oldDocuments, documents, split, newDocuments);
+	split = merge_documents_splitting_at(oldDocuments, documents, split, newDocuments, [self disableTabReordering]);
 
 	self.documents        = newDocuments;
 	self.selectedTabIndex = split;
@@ -1007,6 +1029,17 @@ namespace
 	}
 }
 
+- (void)updateWindowTitleAndRevealFile
+{
+	[self updateWindowTitle];
+	
+	if(self.autoRevealFile)
+	{
+		if(_selectedDocument && _selectedDocument->path() != NULL_STR)
+			[self revealFileInProject:self];
+	}
+}
+
 - (void)updateWindowTitle
 {
 	if(_selectedDocument)
@@ -1119,7 +1152,7 @@ namespace
 			_projectScopeAttributes.push_back(customAttributes);
 
 		[self updateExternalAttributes];
-		[self updateWindowTitle];
+		[self updateWindowTitleAndRevealFile];
 	}
 }
 
@@ -1177,7 +1210,7 @@ namespace
 
 		[self updateExternalAttributes];
 		[self updateProxyIcon];
-		[self updateWindowTitle];
+		[self updateWindowTitleAndRevealFile];
 	}
 }
 
@@ -1186,7 +1219,7 @@ namespace
 	if(_documentDisplayName != newDisplayName && ![_documentDisplayName isEqualToString:newDisplayName])
 	{
 		_documentDisplayName = newDisplayName;
-		[self updateWindowTitle];
+		[self updateWindowTitleAndRevealFile];
 	}
 }
 
@@ -1222,7 +1255,7 @@ namespace
 	if(_projectSCMVariables != newVariables)
 	{
 		_projectSCMVariables = newVariables;
-		[self updateWindowTitle];
+		[self updateWindowTitleAndRevealFile];
 	}
 }
 
@@ -1231,7 +1264,7 @@ namespace
 	if(_documentSCMVariables != newVariables)
 	{
 		_documentSCMVariables = newVariables;
-		[self updateWindowTitle];
+		[self updateWindowTitleAndRevealFile];
 	}
 }
 
@@ -2494,7 +2527,7 @@ static NSUInteger DisableSessionSavingCount = 0;
 				else	++split;
 
 				std::vector<document::document_ptr> newDocuments;
-				split = merge_documents_splitting_at(oldDocuments, documents, split, newDocuments);
+				split = merge_documents_splitting_at(oldDocuments, documents, split, newDocuments, true);
 				controller.documents = newDocuments;
 				controller.selectedTabIndex = split;
 			}
