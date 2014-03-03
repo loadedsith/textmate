@@ -11,8 +11,8 @@ namespace ng
 	// =============
 	// = context_t =
 	// =============
-
-	context_t::context_t (CGContextRef context, CGImageRef spellingDot, std::function<CGImageRef(double, double)> foldingDotsFactory) : _context(context), _spelling_dot(spellingDot), _folding_dots_create(foldingDotsFactory)
+ 	context_t::context_t (CGContextRef context, CGImageRef spellingDot, CGImageRef foldGuide, std::function<CGImageRef(double, double)> foldingDotsFactory) : _context(context), _spelling_dot(spellingDot), _folding_dots_create(foldingDotsFactory)
+	// context_t::context_t (CGContextRef context, CGImageRef spellingDot, std::function<CGImageRef(double, double)> foldingDotsFactory) : _context(context), _spelling_dot(spellingDot), _folding_dots_create(foldingDotsFactory)
 	{
 		if(_spelling_dot)
 			CFRetain(_spelling_dot);

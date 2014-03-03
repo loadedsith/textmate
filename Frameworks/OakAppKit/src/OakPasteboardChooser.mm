@@ -1,5 +1,7 @@
 #import "OakPasteboardChooser.h"
 #import "OakPasteboard.h"
+#import <oak/oak.h>
+#import <oak/debug.h>
 #import <OakAppKit/OakAppKit.h>
 #import <OakAppKit/OakScopeBarView.h>
 #import <OakAppKit/OakUIConstructionFunctions.h>
