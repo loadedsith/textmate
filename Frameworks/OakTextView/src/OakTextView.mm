@@ -328,6 +328,7 @@ typedef std::shared_ptr<links_t> links_ptr;
 @property (nonatomic, copy) NSString* liveSearchString;
 @property (nonatomic) ng::ranges_t const& liveSearchRanges;
 @property (nonatomic, readonly) links_ptr links;
+@property (nonatomic) NSDictionary* matchCaptures; // Captures from last regexp match
 @end
 
 static std::vector<bundles::item_ptr> items_for_tab_expansion (ng::buffer_t const& buffer, ng::ranges_t const& ranges, std::string const& scopeAttributes, ng::range_t* range)
@@ -366,8 +367,8 @@ static std::vector<bundles::item_ptr> items_for_tab_expansion (ng::buffer_t cons
 
 static ng::ranges_t merge (ng::ranges_t lhs, ng::ranges_t const& rhs)
 {
-	iterate(range, rhs)
-		lhs.push_back(*range);
+	for(auto const& range : rhs)
+		lhs.push_back(range);
 	return lhs;
 }
 
@@ -410,10 +411,10 @@ struct refresh_helper_t
 			{
 				if(_revision == _document->buffer().revision())
 				{
-					citerate(range, ng::highlight_ranges_for_movement(_document->buffer(), _selection, _editor->ranges()))
+					for(auto const& range : ng::highlight_ranges_for_movement(_document->buffer(), _selection, _editor->ranges()))
 					{
 						NSRect imageRect;
-						NSImage* image = [_self imageForRanges:*range imageRect:&imageRect];
+						NSImage* image = [_self imageForRanges:range imageRect:&imageRect];
 						imageRect = [_self convertRect:imageRect toView:nil];
 						imageRect.origin = [[_self window] convertBaseToScreen:imageRect.origin];
 						OakShowPopOutAnimation(imageRect, image);
@@ -434,12 +435,12 @@ struct refresh_helper_t
 					[_self setFrameSize:newSize];
 
 				NSView* gutterView = find_gutter_view([[_self enclosingScrollView] superview]);
-				iterate(rect, damagedRects)
+				for(auto const& rect : damagedRects)
 				{
-					[_self setNeedsDisplayInRect:*rect];
+					[_self setNeedsDisplayInRect:rect];
 					if(gutterView)
 					{
-						NSRect r = *rect;
+						NSRect r = rect;
 						r.origin.x = 0;
 						r.size.width = NSWidth([gutterView frame]);
 						[gutterView setNeedsDisplayInRect:r];
@@ -493,8 +494,8 @@ void buffer_refresh_callback_t::did_replace (size_t, size_t, std::string const&)
 
 static std::string shell_quote (std::vector<std::string> paths)
 {
-	iterate(it, paths)
-		*it = format_string::replace(*it, ".+", "'${0/'/'\\''/g}'");
+	for(auto& it : paths)
+		it = format_string::replace(it, ".+", "'${0/'/'\\''/g}'");
 	return text::join(paths, " ");
 }
 
@@ -519,7 +520,7 @@ static std::string shell_quote (std::vector<std::string> paths)
 }
 
 - (NSString*)findString      { return [[OakPasteboard pasteboardWithName:NSFindPboard] current].string;    }
-- (NSString*)replaceString   { return [[OakPasteboard pasteboardWithName:NSReplacePboard] current].string; }
+- (NSString*)replaceString   { return [[OakPasteboard pasteboardWithName:OakReplacePboard] current].string; }
 
 - (void)didFind:(NSUInteger)aNumber occurrencesOf:(NSString*)aFindString atPosition:(text::pos_t const&)aPosition wrapped:(BOOL)didWrap
 {
@@ -569,12 +570,12 @@ static std::string shell_quote (std::vector<std::string> paths)
 - (NSImage*)imageForRanges:(ng::ranges_t const&)ranges imageRect:(NSRect*)outRect
 {
 	NSRect srcRect = NSZeroRect, visibleRect = [self visibleRect];
-	citerate(range, ranges)
-		srcRect = NSUnionRect(srcRect, NSIntersectionRect(visibleRect, layout->rect_for_range(range->min().index, range->max().index)));
+	for(auto const& range : ranges)
+		srcRect = NSUnionRect(srcRect, NSIntersectionRect(visibleRect, layout->rect_for_range(range.min().index, range.max().index)));
 
 	NSBezierPath* clip = [NSBezierPath bezierPath];
-	citerate(rect, layout->rects_for_ranges(ranges))
-		[clip appendBezierPath:[NSBezierPath bezierPathWithRect:NSOffsetRect(*rect, -NSMinX(srcRect), -NSMinY(srcRect))]];
+	for(auto const& rect : layout->rects_for_ranges(ranges))
+		[clip appendBezierPath:[NSBezierPath bezierPathWithRect:NSOffsetRect(rect, -NSMinX(srcRect), -NSMinY(srcRect))]];
 
 	NSImage* image = [[NSImage alloc] initWithSize:NSMakeSize(std::max<CGFloat>(NSWidth(srcRect), 1), std::max<CGFloat>(NSHeight(srcRect), 1))];
 	[image setFlipped:[self isFlipped]];
@@ -601,14 +602,14 @@ static std::string shell_quote (std::vector<std::string> paths)
 	if(ranges.empty())
 		return;
 
-	iterate(range, ranges)
-		layout->remove_enclosing_folds(range->min().index, range->max().index);
+	for(auto const& range : ranges)
+		layout->remove_enclosing_folds(range.min().index, range.max().index);
 	[self ensureSelectionIsInVisibleArea:self];
 
-	citerate(range, ranges)
+	for(auto const& range : ranges)
 	{
 		NSRect imageRect;
-		NSImage* image = [self imageForRanges:*range imageRect:&imageRect];
+		NSImage* image = [self imageForRanges:range imageRect:&imageRect];
 		imageRect = [self convertRect:imageRect toView:nil];
 		imageRect.origin = [[self window] convertBaseToScreen:imageRect.origin];
 		OakShowPopOutAnimation(imageRect, image);
@@ -641,8 +642,8 @@ static std::string shell_quote (std::vector<std::string> paths)
 		{
 			ng::ranges_t ranges = convert(document->buffer(), document->selection());
 			editor->set_selections(ranges);
-			iterate(range, ranges)
-				layout->remove_enclosing_folds(range->min().index, range->max().index);
+			for(auto const& range : ranges)
+				layout->remove_enclosing_folds(range.min().index, range.max().index);
 
 			[self ensureSelectionIsInVisibleArea:self];
 			[self updateSelection];
@@ -702,15 +703,15 @@ static std::string shell_quote (std::vector<std::string> paths)
 
 		editor->set_clipboard(get_clipboard(NSGeneralPboard));
 		editor->set_find_clipboard(get_clipboard(NSFindPboard));
-		editor->set_replace_clipboard(get_clipboard(NSReplacePboard));
+		editor->set_replace_clipboard(get_clipboard(OakReplacePboard));
 
 		ng::index_t visibleIndex = document->visible_index();
 		if(document->selection() != NULL_STR)
 		{
 			ng::ranges_t ranges = convert(document->buffer(), document->selection());
 			editor->set_selections(ranges);
-			iterate(range, ranges)
-				layout->remove_enclosing_folds(range->min().index, range->max().index);
+			for(auto const& range : ranges)
+				layout->remove_enclosing_folds(range.min().index, range.max().index);
 		}
 
 		[self reflectDocumentSize];
@@ -770,8 +771,8 @@ static std::string shell_quote (std::vector<std::string> paths)
 	if(window != self.window)
 		return;
 
-	citerate(item, bundles::query(bundles::kFieldSemanticClass, "callback.document.will-save", [self scopeContext]))
-		[self performBundleItem:*item];
+	for(auto const& item : bundles::query(bundles::kFieldSemanticClass, "callback.document.will-save", [self scopeContext], bundles::kItemTypeMost, oak::uuid_t(), false))
+		[self performBundleItem:item];
 
 	if(document && layout)
 	{
@@ -786,8 +787,8 @@ static std::string shell_quote (std::vector<std::string> paths)
 	if(window != self.window)
 		return;
 
-	citerate(item, bundles::query(bundles::kFieldSemanticClass, "callback.document.did-save", [self scopeContext]))
-		[self performBundleItem:*item];
+	for(auto const& item : bundles::query(bundles::kFieldSemanticClass, "callback.document.did-save", [self scopeContext], bundles::kItemTypeMost, oak::uuid_t(), false))
+		[self performBundleItem:item];
 }
 
 - (void)reflectDocumentSize
@@ -1045,13 +1046,13 @@ doScroll:
 	pendingMarkedRanges = markedRanges;
 
 	ng::ranges_t sel;
-	citerate(range, editor->ranges())
+	for(auto const& range : editor->ranges())
 	{
-		std::string const str = document->buffer().substr(range->min().index, range->max().index);
+		std::string const str = document->buffer().substr(range.min().index, range.max().index);
 		char const* base = str.data();
 		size_t from = utf16::advance(base, aRange.location, base + str.size()) - base;
 		size_t to   = utf16::advance(base, aRange.location + aRange.length, base + str.size()) - base;
-		sel.push_back(ng::range_t(range->min() + from, range->min() + to));
+		sel.push_back(ng::range_t(range.min() + from, range.min() + to));
 	}
 	editor->set_selections(sel);
 }
@@ -1228,8 +1229,8 @@ doScroll:
 	} HANDLE_ATTR(SelectedTextRanges) {
 		ng::ranges_t const ranges = editor->ranges();
 		NSMutableArray* nsRanges = [NSMutableArray arrayWithCapacity:ranges.size()];
-		iterate(range, ranges)
-			[nsRanges addObject:[NSValue valueWithRange:[self nsRangeForRange:(*range)]]];
+		for(auto const& range : ranges)
+			[nsRanges addObject:[NSValue valueWithRange:[self nsRangeForRange:range]]];
 		ret = nsRanges;
 	} HANDLE_ATTR(VisibleCharacterRange) {
 		NSRect visibleRect = [self visibleRect];
@@ -1629,14 +1630,14 @@ doScroll:
 
 - (void)applicationDidBecomeActiveNotification:(NSNotification*)aNotification
 {
-	citerate(item, bundles::query(bundles::kFieldSemanticClass, "callback.application.did-activate", [self scopeContext]))
-		[self performBundleItem:*item];
+	for(auto const& item : bundles::query(bundles::kFieldSemanticClass, "callback.application.did-activate", [self scopeContext], bundles::kItemTypeMost, oak::uuid_t(), false))
+		[self performBundleItem:item];
 }
 
 - (void)applicationDidResignActiveNotification:(NSNotification*)aNotification
 {
-	citerate(item, bundles::query(bundles::kFieldSemanticClass, "callback.application.did-deactivate", [self scopeContext]))
-		[self performBundleItem:*item];
+	for(auto const& item : bundles::query(bundles::kFieldSemanticClass, "callback.application.did-deactivate", [self scopeContext], bundles::kItemTypeMost, oak::uuid_t(), false))
+		[self performBundleItem:item];
 }
 
 // ============
@@ -1651,8 +1652,8 @@ static plist::any_t normalize_potential_dictionary (plist::any_t const& action)
 	if(plist::dictionary_t const* dict = boost::get<plist::dictionary_t>(&action))
 	{
 		plist::dictionary_t res;
-		citerate(pair, *dict)
-			res.emplace(ns::normalize_event_string(pair->first), normalize_potential_dictionary(pair->second));
+		for(auto const& pair : *dict)
+			res.emplace(ns::normalize_event_string(pair.first), normalize_potential_dictionary(pair.second));
 		return res;
 	}
 	return action;
@@ -1675,11 +1676,8 @@ static void update_menu_key_equivalents (NSMenu* menu, action_to_key_t const& ac
 
 + (void)initialize
 {
-	static bool didLoad = false;
-	if(!didLoad)
-	{
-		didLoad = true;
-
+	static dispatch_once_t onceToken = 0;
+	dispatch_once(&onceToken, ^{
 		static std::string const KeyBindingLocations[] =
 		{
 			oak::application_t::support("KeyBindings.dict"),
@@ -1689,17 +1687,17 @@ static void update_menu_key_equivalents (NSMenu* menu, action_to_key_t const& ac
 			"/System/Library/Frameworks/AppKit.framework/Resources/StandardKeyBinding.dict",
 		};
 
-		iterate(path, KeyBindingLocations)
+		for(auto const& path : KeyBindingLocations)
 		{
-			citerate(pair, plist::load(*path))
-				KeyBindings.emplace(ns::normalize_event_string(pair->first), normalize_potential_dictionary(pair->second));
+			for(auto const& pair : plist::load(path))
+				KeyBindings.emplace(ns::normalize_event_string(pair.first), normalize_potential_dictionary(pair.second));
 		}
 
 		action_to_key_t actionToKey;
-		iterate(pair, KeyBindings)
+		for(auto const& pair : KeyBindings)
 		{
-			if(std::string const* selector = boost::get<std::string>(&pair->second))
-				actionToKey.emplace(*selector, pair->first);
+			if(std::string const* selector = boost::get<std::string>(&pair.second))
+				actionToKey.emplace(*selector, pair.first);
 		}
 
 		update_menu_key_equivalents([NSApp mainMenu], actionToKey);
@@ -1707,7 +1705,7 @@ static void update_menu_key_equivalents (NSMenu* menu, action_to_key_t const& ac
 		[[NSUserDefaults standardUserDefaults] registerDefaults:@{
 			kUserDefaultsFontSmoothingKey : @(OTVFontSmoothingDisabledForDarkHiDPI),
 		}];
-	}
+	});
 
 	[NSApp registerServicesMenuSendTypes:@[ NSStringPboardType ] returnTypes:@[ NSStringPboardType ]];
 }
@@ -1732,8 +1730,8 @@ static void update_menu_key_equivalents (NSMenu* menu, action_to_key_t const& ac
 	{
 		std::vector<std::string> v;
 		ng::ranges_t const ranges = ng::dissect_columnar(document->buffer(), editor->ranges());
-		iterate(range, ranges)
-			v.push_back(document->buffer().substr(range->min().index, range->max().index));
+		for(auto const& range : ranges)
+			v.push_back(document->buffer().substr(range.min().index, range.max().index));
 
 		[pboard declareTypes:@[ NSStringPboardType ] owner:nil];
 		res = [pboard setString:[NSString stringWithCxxString:text::join(v, "\n")] forType:NSStringPboardType];
@@ -1766,9 +1764,9 @@ static void update_menu_key_equivalents (NSMenu* menu, action_to_key_t const& ac
 	{
 		KeyEventContext = &KeyBindings;
 		std::vector<std::string> selectors;
-		iterate(it, *actions)
+		for(auto const& it : *actions)
 		{
-			if(std::string const* selector = boost::get<std::string>(&*it))
+			if(std::string const* selector = boost::get<std::string>(&it))
 				selectors.push_back(*selector);
 		}
 
@@ -1936,7 +1934,7 @@ static void update_menu_key_equivalents (NSMenu* menu, action_to_key_t const& ac
 
 		if(event != OakChoiceMenuKeyCancel)
 		{
-			editor->perform(ng::kInsertTab, layout.get(), [self continuousIndentCorrections], to_s([self scopeAttributes]));
+			editor->perform(ng::kInsertTab, layout.get(), [self indentCorrections], to_s([self scopeAttributes]));
 			choiceVector.clear();
 		}
 	}
@@ -1997,7 +1995,7 @@ static void update_menu_key_equivalents (NSMenu* menu, action_to_key_t const& ac
 
 	[self recordSelector:_cmd withArgument:[aString copy]];
 	bool autoPairing = !macroRecordingArray && ![[NSUserDefaults standardUserDefaults] boolForKey:kUserDefaultsDisableTypingPairsKey];
-	editor->insert_with_pairing([aString UTF8String], [self continuousIndentCorrections], autoPairing, to_s([self scopeAttributes]));
+	editor->insert_with_pairing([aString UTF8String], [self indentCorrections], autoPairing, to_s([self scopeAttributes]));
 }
 
 - (IBAction)toggleCurrentFolding:(id)sender
@@ -2030,8 +2028,8 @@ static void update_menu_key_equivalents (NSMenu* menu, action_to_key_t const& ac
 
 - (NSPoint)positionForWindowUnderCaret
 {
-	CGRect r1 = layout->rect_at_index(editor->ranges().last().first);
-	CGRect r2 = layout->rect_at_index(editor->ranges().last().last);
+	CGRect r1 = layout->rect_at_index(editor->ranges().last().normalized().first);
+	CGRect r2 = layout->rect_at_index(editor->ranges().last().normalized().last);
 	CGRect r = r1.origin.y == r2.origin.y && r1.origin.x < r2.origin.x ? r1 : r2;
 	NSPoint p = NSMakePoint(CGRectGetMinX(r), CGRectGetMaxY(r)+4);
 	if(NSPointInRect(p, [self visibleRect]))
@@ -2217,11 +2215,9 @@ static void update_menu_key_equivalents (NSMenu* menu, action_to_key_t const& ac
 	{
 		NSMutableDictionary* dict = [NSMutableDictionary dictionary];
 
-		dict[@"findString"] = aFindServer.findString;
+		dict[@"findString"]    = aFindServer.findString;
+		dict[@"replaceString"] = aFindServer.replaceString;
 
-		static find_operation_t const replaceActions[] = { kFindOperationReplaceAll, kFindOperationReplaceAllInSelection, kFindOperationReplace, kFindOperationReplaceAndFind };
-		if(oak::contains(std::begin(replaceActions), std::end(replaceActions), aFindServer.findOperation))
-			dict[@"replaceString"] = aFindServer.replaceString;
 		static find_operation_t const inSelectionActions[] = { kFindOperationFindInSelection, kFindOperationReplaceAllInSelection };
 		if(oak::contains(std::begin(inSelectionActions), std::end(inSelectionActions), aFindServer.findOperation))
 			dict[@"replaceAllScope"] = @"selection";
@@ -2267,7 +2263,7 @@ static void update_menu_key_equivalents (NSMenu* menu, action_to_key_t const& ac
 	if(findOperation == kFindOperationReplace || findOperation == kFindOperationReplaceAndFind)
 	{
 		std::string replacement = to_s(aFindServer.replaceString);
-		if(NSDictionary* captures = [OakPasteboard pasteboardWithName:NSReplacePboard].auxiliaryOptionsForCurrent)
+		if(NSDictionary* captures = self.matchCaptures)
 		{
 			std::map<std::string, std::string> variables;
 			for(NSString* key in [captures allKeys])
@@ -2288,7 +2284,7 @@ static void update_menu_key_equivalents (NSMenu* menu, action_to_key_t const& ac
 		case kFindOperationFind:
 		case kFindOperationCount:
 		{
-			[OakPasteboard pasteboardWithName:NSReplacePboard].auxiliaryOptionsForCurrent = nil;
+			self.matchCaptures = nil;
 			bool isCounting = findOperation == kFindOperationCount || findOperation == kFindOperationCountInSelection;
 
 			std::string const findStr = to_s(aFindServer.findString);
@@ -2341,8 +2337,8 @@ static void update_menu_key_equivalents (NSMenu* menu, action_to_key_t const& ac
 			else
 			{
 				std::set<ng::range_t> alreadySelected;
-				citerate(range, editor->ranges())
-					alreadySelected.insert(*range);
+				for(auto const& range : editor->ranges())
+					alreadySelected.insert(range);
 
 				ng::ranges_t newSelection;
 				for(auto range : res)
@@ -2359,7 +2355,7 @@ static void update_menu_key_equivalents (NSMenu* menu, action_to_key_t const& ac
 						NSMutableDictionary* captures = [NSMutableDictionary dictionary];
 						for(auto pair : allMatches[res.last()])
 							captures[[NSString stringWithCxxString:pair.first]] = [NSString stringWithCxxString:pair.second];
-						[OakPasteboard pasteboardWithName:NSReplacePboard].auxiliaryOptionsForCurrent = captures;
+						self.matchCaptures = captures;
 					}
 				}
 
@@ -2453,8 +2449,8 @@ static void update_menu_key_equivalents (NSMenu* menu, action_to_key_t const& ac
 	self.liveSearchString = [searchField string];
 
 	ng::ranges_t res;
-	citerate(pair, ng::find(document->buffer(), liveSearchAnchor, to_s(liveSearchString), find::ignore_case|find::ignore_whitespace|find::wrap_around))
-		res.push_back(pair->first);
+	for(auto const& pair : ng::find(document->buffer(), liveSearchAnchor, to_s(liveSearchString), find::ignore_case|find::ignore_whitespace|find::wrap_around))
+		res.push_back(pair.first);
 	[self setLiveSearchRanges:res];
 }
 
@@ -2477,8 +2473,8 @@ static void update_menu_key_equivalents (NSMenu* menu, action_to_key_t const& ac
 	if(self.liveSearchView)
 	{
 		ng::ranges_t tmp;
-		citerate(pair, ng::find(document->buffer(), ng::move(document->buffer(), liveSearchRanges.empty() ? liveSearchAnchor : liveSearchRanges, kSelectionMoveToEndOfSelection), to_s(liveSearchString), find::ignore_case|find::ignore_whitespace))
-			tmp.push_back(pair->first);
+		for(auto const& pair : ng::find(document->buffer(), ng::move(document->buffer(), liveSearchRanges.empty() ? liveSearchAnchor : liveSearchRanges, kSelectionMoveToEndOfSelection), to_s(liveSearchString), find::ignore_case|find::ignore_whitespace))
+			tmp.push_back(pair.first);
 		[self setLiveSearchRanges:tmp];
 		if(!tmp.empty())
 			liveSearchAnchor = ng::move(document->buffer(), tmp, kSelectionMoveToBeginOfSelection);
@@ -2494,8 +2490,8 @@ static void update_menu_key_equivalents (NSMenu* menu, action_to_key_t const& ac
 	if(self.liveSearchView)
 	{
 		ng::ranges_t tmp;
-		citerate(pair, ng::find(document->buffer(), ng::move(document->buffer(), liveSearchRanges.empty() ? liveSearchAnchor : liveSearchRanges, kSelectionMoveToBeginOfSelection), to_s(liveSearchString), find::backwards|find::ignore_case|find::ignore_whitespace))
-			tmp.push_back(pair->first);
+		for(auto const& pair : ng::find(document->buffer(), ng::move(document->buffer(), liveSearchRanges.empty() ? liveSearchAnchor : liveSearchRanges, kSelectionMoveToBeginOfSelection), to_s(liveSearchString), find::backwards|find::ignore_case|find::ignore_whitespace))
+			tmp.push_back(pair.first);
 		[self setLiveSearchRanges:tmp];
 		if(!tmp.empty())
 			liveSearchAnchor = ng::move(document->buffer(), tmp, kSelectionMoveToBeginOfSelection);
@@ -2566,7 +2562,7 @@ static void update_menu_key_equivalents (NSMenu* menu, action_to_key_t const& ac
 	if(![self expandTabTrigger:sender])
 	{
 		[self recordSelector:_cmd withArgument:nil];
-		editor->perform(ng::kInsertTab, layout.get(), [self continuousIndentCorrections], to_s([self scopeAttributes]));
+		editor->perform(ng::kInsertTab, layout.get(), [self indentCorrections], to_s([self scopeAttributes]));
 	}
 }
 
@@ -2705,9 +2701,20 @@ static char const* kOakMenuItemTitle = "OakMenuItemTitle";
 - (BOOL)softTabs              { return document ? document->indent().soft_tabs() : NO; }
 - (BOOL)softWrap              { return layout && layout->wrapping(); }
 
-- (BOOL)continuousIndentCorrections
+- (ng::indent_correction_t)indentCorrections
 {
-	return !plist::is_true(bundles::value_for_setting("disableIndentCorrections", [self scopeContext]));
+	plist::any_t indentCorrections = bundles::value_for_setting("disableIndentCorrections", [self scopeContext]);
+	if(std::string const* str = boost::get<std::string>(&indentCorrections))
+	{
+		if(str->find("emptyLines") == 0)
+			return ng::kIndentCorrectNonEmptyLines;
+		NSLog(@"%s unrecognized indent option: ‘%s’", sel_getName(_cmd), str->c_str());
+	}
+	else if(plist::is_true(indentCorrections))
+	{
+		return ng::kIndentCorrectNever;
+	}
+	return ng::kIndentCorrectAlways;
 }
 
 - (void)setTheme:(theme_ptr const&)newTheme
@@ -2958,8 +2965,8 @@ static char const* kOakMenuItemTitle = "OakMenuItemTitle";
 	AUTO_REFRESH;
 	ng::ranges_t ranges = convert(document->buffer(), to_s(aSelectionString));
 	editor->set_selections(ranges);
-	iterate(range, ranges)
-		layout->remove_enclosing_folds(range->min().index, range->max().index);
+	for(auto const& range : ranges)
+		layout->remove_enclosing_folds(range.min().index, range.max().index);
 }
 
 - (NSString*)selectionString
@@ -2970,17 +2977,17 @@ static char const* kOakMenuItemTitle = "OakMenuItemTitle";
 - (void)updateSelection
 {
 	text::selection_t ranges, withoutCarry;
-	citerate(range, editor->ranges())
+	for(auto const& range : editor->ranges())
 	{
-		text::pos_t from = document->buffer().convert(range->first.index);
-		text::pos_t to   = document->buffer().convert(range->last.index);
-		if(!range->freehanded && !range->columnar)
-			withoutCarry.push_back(text::range_t(from, to, range->columnar));
-		from.offset = range->first.carry;
-		to.offset   = range->last.carry;
-		if(range->freehanded || range->columnar)
-			withoutCarry.push_back(text::range_t(from, to, range->columnar));
-		ranges.push_back(text::range_t(from, to, range->columnar));
+		text::pos_t from = document->buffer().convert(range.first.index);
+		text::pos_t to   = document->buffer().convert(range.last.index);
+		if(!range.freehanded && !range.columnar)
+			withoutCarry.push_back(text::range_t(from, to, range.columnar));
+		from.offset = range.first.carry;
+		to.offset   = range.last.carry;
+		if(range.freehanded || range.columnar)
+			withoutCarry.push_back(text::range_t(from, to, range.columnar));
+		ranges.push_back(text::range_t(from, to, range.columnar));
 	}
 	document->set_selection(ranges);
 
@@ -3168,11 +3175,11 @@ static char const* kOakMenuItemTitle = "OakMenuItemTitle";
 	scope::context_t scope = [self scopeContext];
 	for(NSString* path in someFiles)
 	{
-		citerate(item, bundles::drag_commands_for_path(to_s(path), scope))
+		for(auto const& item : bundles::drag_commands_for_path(to_s(path), scope))
 		{
-			D(DBF_OakTextView_DragNDrop, bug("handler: %s\n", (*item)->full_name().c_str()););
-			handlerToFiles[(*item)->uuid()].push_back(to_s(path));
-			allHandlers.insert(*item);
+			D(DBF_OakTextView_DragNDrop, bug("handler: %s\n", item->full_name().c_str()););
+			handlerToFiles[item->uuid()].push_back(to_s(path));
+			allHandlers.insert(item);
 		}
 	}
 
@@ -3258,8 +3265,8 @@ static char const* kOakMenuItemTitle = "OakMenuItemTitle";
 - (BOOL)isPointInSelection:(NSPoint)aPoint
 {
 	BOOL res = NO;
-	citerate(rect, layout->rects_for_ranges(editor->ranges(), kRectsIncludeSelections))
-		res = res || CGRectContainsPoint(*rect, aPoint);
+	for(auto const& rect : layout->rects_for_ranges(editor->ranges(), kRectsIncludeSelections))
+		res = res || CGRectContainsPoint(rect, aPoint);
 	return res;
 }
 
@@ -3442,10 +3449,10 @@ static char const* kOakMenuItemTitle = "OakMenuItemTitle";
 	{
 		bool didToggle = false;
 		ng::ranges_t newSel;
-		citerate(cur, s)
+		for(auto const& cur : s)
 		{
-			if(*cur != range.last())
-					newSel.push_back(*cur);
+			if(cur != range.last())
+					newSel.push_back(cur);
 			else	didToggle = true;
 		}
 		s = newSel;
@@ -3496,8 +3503,8 @@ static char const* kOakMenuItemTitle = "OakMenuItemTitle";
 	[image unlockFocus];
 
 	std::vector<std::string> v;
-	iterate(range, ranges)
-		v.push_back(document->buffer().substr(range->min().index, range->max().index));
+	for(auto const& range : ranges)
+		v.push_back(document->buffer().substr(range.min().index, range.max().index));
 
 	NSPasteboard* pboard = [NSPasteboard pasteboardWithName:NSDragPboard];
 	[pboard declareTypes:@[ NSStringPboardType ] owner:self];
@@ -3705,7 +3712,7 @@ static scope::context_t add_modifiers_to_scope (scope::context_t scope, NSUInteg
 	AUTO_REFRESH;
 	[self recordSelector:aSelector withArgument:nil];
 	try {
-		editor->perform(anAction, layout.get(), [self continuousIndentCorrections], to_s([self scopeAttributes]));
+		editor->perform(anAction, layout.get(), [self indentCorrections], to_s([self scopeAttributes]));
 	}
 	catch(std::exception const& e) {
 		crash_reporter_info_t info(text::format("Performing @selector(%s)\nC++ Exception: %s", sel_getName(aSelector), e.what()));

@@ -12,25 +12,21 @@ namespace ng
 	// = context_t =
 	// =============
 
-	context_t::context_t (CGContextRef context, CGImageRef spellingDot, CGImageRef foldGuide, std::function<CGImageRef(double, double)> foldingDotsFactory) : _context(context), _spelling_dot(spellingDot),_fold_guide(foldGuide), _folding_dots_create(foldingDotsFactory)
+	context_t::context_t (CGContextRef context, CGImageRef spellingDot, std::function<CGImageRef(double, double)> foldingDotsFactory) : _context(context), _spelling_dot(spellingDot), _folding_dots_create(foldingDotsFactory)
 	{
 		if(_spelling_dot)
 			CFRetain(_spelling_dot);
-		if(_fold_guide)
-			CFRetain(_fold_guide);
 	}
 
 	context_t::~context_t ()
 	{
 		if(_spelling_dot)
 			CFRelease(_spelling_dot);
-		if(_fold_guide)
-			CFRelease(_fold_guide);
 
-		iterate(pair, _folding_dots_cache)
+		for(auto const& pair : _folding_dots_cache)
 		{
-			if(pair->second)
-				CFRelease(pair->second);
+			if(pair.second)
+				CFRelease(pair.second);
 		}
 	}
 
@@ -132,12 +128,8 @@ namespace ct
 			CFAttributedStringSetAttribute(str, CFRangeMake(0, CFAttributedStringGetLength(str)), kCTFontAttributeName, styles.font());
 			CFAttributedStringSetAttribute(str, CFRangeMake(0, CFAttributedStringGetLength(str)), kCTForegroundColorAttributeName, textColor ?: styles.foreground());
 			CFAttributedStringSetAttribute(str, CFRangeMake(0, CFAttributedStringGetLength(str)), kCTLigatureAttributeName, cf::wrap(0));
-			if(styles.underlined()){
-				 _underlines.push_back(std::make_pair(CFRangeMake(CFAttributedStringGetLength(toDraw), CFAttributedStringGetLength(str)), CGColorPtr(CGColorRetain(styles.foreground()), CGColorRelease)));
-			}
-			if(styles.foldGuide()){
-				_foldGuides.push_back(std::make_pair(CFRangeMake(CFAttributedStringGetLength(toDraw), CFAttributedStringGetLength(str)), CGColorPtr(CGColorRetain(styles.foreground()), CGColorRelease)));
-			}
+			if(styles.underlined())
+				_underlines.push_back(std::make_pair(CFRangeMake(CFAttributedStringGetLength(toDraw), CFAttributedStringGetLength(str)), CGColorPtr(CGColorRetain(styles.foreground()), CGColorRelease)));
 			_backgrounds.push_back(std::make_pair(CFRangeMake(CFAttributedStringGetLength(toDraw), CFAttributedStringGetLength(str)), CGColorPtr(CGColorRetain(styles.background()), CGColorRelease)));
 			CFAttributedStringReplaceAttributedString(toDraw, CFRangeMake(CFAttributedStringGetLength(toDraw), 0), str);
 			CFRelease(str);
@@ -161,16 +153,6 @@ namespace ct
 		return CTLineGetOffsetForStringIndex(_line.get(), utf16::distance(_text.begin(), _text.begin() + index), NULL);
 	}
 
-	static void draw_fold_guide (ng::context_t const& context, CGRect const& rect)
-	{
-		if(CGImageRef fold_guide = context.fold_guide())
-		{
-			CGContextSaveGState(context);
-			CGContextDrawImage(context, CGRectMake(rect.origin.x, rect.origin.y, rect.size.width, 3), fold_guide);
-			CGContextRestoreGState(context);
-		}
-	}
-
 	static void draw_spelling_dot (ng::context_t const& context, CGRect const& rect, bool isFlipped)
 	{
 		if(CGImageRef spellingDot = context.spelling_dot())
@@ -186,17 +168,17 @@ namespace ct
 
 	void line_t::draw_foreground (CGPoint pos, ng::context_t const& context, bool isFlipped, std::vector< std::pair<size_t, size_t> > const& misspelled) const
 	{
-		iterate(pair, _underlines) // Draw our own underline since CoreText does an awful job <rdar://5845224>
+		for(auto const& pair : _underlines) // Draw our own underline since CoreText does an awful job <rdar://5845224>
 		{
-			CGFloat x1 = round(pos.x + CTLineGetOffsetForStringIndex(_line.get(), pair->first.location, NULL));
-			CGFloat x2 = round(pos.x + CTLineGetOffsetForStringIndex(_line.get(), pair->first.location + pair->first.length, NULL));
-			render::fill_rect(context, pair->second.get(), CGRectMake(x1, pos.y + 1, x2 - x1, 1));
+			CGFloat x1 = round(pos.x + CTLineGetOffsetForStringIndex(_line.get(), pair.first.location, NULL));
+			CGFloat x2 = round(pos.x + CTLineGetOffsetForStringIndex(_line.get(), pair.first.location + pair.first.length, NULL));
+			render::fill_rect(context, pair.second.get(), CGRectMake(x1, pos.y + 1, x2 - x1, 1));
 		}
 
-		iterate(pair, misspelled)
+		for(auto const& pair : misspelled)
 		{
-			CFIndex location = utf16::distance(_text.begin(),               _text.begin() + pair->first);
-			CFIndex length   = utf16::distance(_text.begin() + pair->first, _text.begin() + pair->second);
+			CFIndex location = utf16::distance(_text.begin(),               _text.begin() + pair.first);
+			CFIndex length   = utf16::distance(_text.begin() + pair.first, _text.begin() + pair.second);
 			CGFloat x1 = round(pos.x + CTLineGetOffsetForStringIndex(_line.get(), location, NULL));
 			CGFloat x2 = round(pos.x + CTLineGetOffsetForStringIndex(_line.get(), location + length, NULL));
 			draw_spelling_dot(context, CGRectMake(x1, pos.y + 1, x2 - x1, 3), isFlipped);
@@ -212,22 +194,15 @@ namespace ct
 
 	void line_t::draw_background (CGPoint pos, CGFloat height, ng::context_t const& context, bool isFlipped, CGColorRef currentBackground) const
 	{
-
-		iterate(pair, _backgrounds)
+		for(auto const& pair : _backgrounds)
 		{
-			if(CFEqual(currentBackground, pair->second.get()))
+			if(CFEqual(currentBackground, pair.second.get()))
 				continue;
-			CGFloat x1 = round(pos.x + CTLineGetOffsetForStringIndex(_line.get(), pair->first.location, NULL));
-			CGFloat x2 = round(pos.x + CTLineGetOffsetForStringIndex(_line.get(), pair->first.location + pair->first.length, NULL));
-			render::fill_rect(context, pair->second.get(), CGRectMake(x1, pos.y, x2 - x1, height));
-		}
-		iterate(pair, _foldGuides) // Draw a vertical bar to act as a fold guide, to be used with the fold guide extention
-		{
-			CGFloat x1 = round((pos.x + CTLineGetOffsetForStringIndex(_line.get(), pair->first.location, NULL))+(height/12)*1.5);
-//			CGFloat x2 = round((pos.x + CTLineGetOffsetForStringIndex(_line.get(), pair->first.location + pair->first.length, NULL))-(height/12)*1.5);
-			render::fill_rect(context, pair->second.get(), CGRectMake(x1, pos.y , (height/12)*.75, height));
-		}
 
+			CGFloat x1 = round(pos.x + CTLineGetOffsetForStringIndex(_line.get(), pair.first.location, NULL));
+			CGFloat x2 = round(pos.x + CTLineGetOffsetForStringIndex(_line.get(), pair.first.location + pair.first.length, NULL));
+			render::fill_rect(context, pair.second.get(), CGRectMake(x1, pos.y, x2 - x1, height));
+		}
 	}
 
 } /* ct */

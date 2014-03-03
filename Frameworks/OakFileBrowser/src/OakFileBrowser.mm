@@ -374,6 +374,13 @@ static NSMutableSet* SymmetricDifference (NSMutableSet* aSet, NSMutableSet* anot
 		{
 			if([parentURL isEqual:currentURL])
 				isChild = YES;
+
+			if([currentURL isFileURL] && (path::info([[currentURL path] fileSystemRepresentation]) & path::flag::package))
+			{
+				parentURL = currentURL;
+				isChild = YES;
+				break;
+			}
 		}
 		[self goToURL:isChild ? parentURL : ParentForURL(aURL)];
 	}
@@ -404,8 +411,8 @@ static NSMutableSet* SymmetricDifference (NSMutableSet* aSet, NSMutableSet* anot
 	if(!selection.empty())
 	{
 		std::vector<std::string> quoted;
-		iterate(path, selection)
-			quoted.push_back(format_string::replace(*path, "\\A(?m:.*)\\z", "'${0/'/'\\''/}'"));
+		for(auto const& path : selection)
+			quoted.push_back(format_string::replace(path, "\\A(?m:.*)\\z", "'${0/'/'\\''/}'"));
 		env["TM_SELECTED_FILE"]  = selection.back();
 		env["TM_SELECTED_FILES"] = text::join(quoted, " ");
 	}
@@ -933,8 +940,8 @@ static NSMutableSet* SymmetricDifference (NSMutableSet* aSet, NSMutableSet* anot
 			[aMenu addItem:[NSMenuItem separatorItem]];
 
 			std::multimap<std::string, bundles::item_ptr, text::less_t> sorted;
-			iterate(item, items)
-				sorted.emplace((*item)->name(), *item);
+			for(auto const& item : items)
+				sorted.emplace(item->name(), item);
 
 			for(auto pair : sorted)
 				[[aMenu addItemWithTitle:[NSString stringWithCxxString:pair.first] action:@selector(executeBundleCommand:) keyEquivalent:@""] setRepresentedObject:[NSString stringWithCxxString:pair.second->uuid()]];

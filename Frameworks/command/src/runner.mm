@@ -1,5 +1,6 @@
 #include "runner.h"
 #include <OakSystem/application.h>
+#include <OakSystem/process.h>
 #include <io/path.h>
 #include <regexp/format_string.h>
 
@@ -52,6 +53,8 @@ namespace command
 			finish();
 			_output_reader = my_reader_ptr();
 			_error_reader  = my_reader_ptr();
+
+			[NSApp postEvent:[NSEvent otherEventWithType:NSApplicationDefined location:NSZeroPoint modifierFlags:0 timestamp:0 windowNumber:0 context:NULL subtype:0 data1:0 data2:0] atStart:NO];
 		}
 	}
 
@@ -107,11 +110,38 @@ namespace command
 
 	void runner_t::wait (bool alsoForDetached)
 	{
+		NSMutableArray* queuedEvents = [NSMutableArray array];
 		while(_retain_count != 0 && (alsoForDetached || !_did_detach))
 		{
-			if(CFRunLoopRunInMode(kCFRunLoopDefaultMode, 20, true) == kCFRunLoopRunFinished)
+			if(NSEvent* event = [NSApp nextEventMatchingMask:NSAnyEventMask untilDate:[NSDate distantFuture] inMode:NSDefaultRunLoopMode dequeue:YES])
+			{
+				static NSEventType const events[] = { NSLeftMouseDown, NSLeftMouseUp, NSRightMouseDown, NSRightMouseUp, NSOtherMouseDown, NSOtherMouseUp, NSLeftMouseDragged, NSRightMouseDragged, NSOtherMouseDragged, NSKeyDown, NSKeyUp, NSFlagsChanged };
+				if(!oak::contains(std::begin(events), std::end(events), [event type]))
+				{
+					[NSApp sendEvent:event];
+				}
+				else if([event type] == NSKeyDown && (([[event charactersIgnoringModifiers] isEqualToString:@"c"] && ([event modifierFlags] & (NSShiftKeyMask|NSControlKeyMask|NSAlternateKeyMask|NSCommandKeyMask)) == NSControlKeyMask) || ([[event charactersIgnoringModifiers] isEqualToString:@"."] && ([event modifierFlags] & (NSShiftKeyMask|NSControlKeyMask|NSAlternateKeyMask|NSCommandKeyMask)) == NSCommandKeyMask)))
+				{
+					NSInteger choice = NSRunAlertPanel(@"Stop Command Execution", @"Would you like to kill the current shell command?", @"Kill Command", @"Cancel", nil);
+					if(choice == NSAlertDefaultReturn) // "Kill Command"
+					{
+						_user_abort = true;
+						oak::kill_process_group_in_background(process_id());
+					}
+				}
+				else
+				{
+					[queuedEvents addObject:event];
+				}
+			}
+			else
+			{
 				break;
+			}
 		}
+
+		for(NSEvent* event in queuedEvents)
+			[NSApp postEvent:event atStart:NO];
 	}
 
 	void runner_t::did_exit (int rc)
@@ -147,7 +177,7 @@ namespace command
 		}
 
 		D(DBF_Command_Runner, bug("placement %d, format %d\n", placement, format););
-		if(_return_code != 0 && !(200 <= _return_code && _return_code <= 207))
+		if(_return_code != 0 && !_user_abort && !(200 <= _return_code && _return_code <= 207))
 		{
 			_delegate->show_error(_command, _return_code, _out, _err);
 		}

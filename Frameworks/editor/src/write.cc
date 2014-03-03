@@ -23,7 +23,7 @@ namespace ng
 		switch(actualUnit)
 		{
 			case input::character:        r = extend_if_empty(buffer, range, kSelectionExtendRight).last();        break;
-			case input::word:             r = extend_if_empty(buffer, range, kSelectionExtendToWord).last();       break;
+			case input::word:             r = word_at(buffer, range);                                          break;
 			case input::line:             r = extend_if_empty(buffer, range, kSelectionExtendToLineExclLF).last(); break;
 			case input::scope:            r = select_scope(buffer, range, scopeSelector).last();                   break;
 			case input::selection:        r = range;                                                               break;
@@ -34,11 +34,11 @@ namespace ng
 		{
 			std::string str = "";
 			bool first = true;
-			citerate(range, dissect_columnar(buffer, r))
+			for(auto const& range : dissect_columnar(buffer, r))
 			{
 				if(!first)
 					str += "\n";
-				str += format == input_format::xml ? to_xml(buffer, range->min().index, range->max().index) : buffer.substr(range->min().index, range->max().index);
+				str += format == input_format::xml ? to_xml(buffer, range.min().index, range.max().index) : buffer.substr(range.min().index, range.max().index);
 				first = false;
 			}
 

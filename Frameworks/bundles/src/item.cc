@@ -9,6 +9,7 @@
 namespace bundles
 {
 	int kItemTypeMenuTypes = kItemTypeCommand|kItemTypeMacro|kItemTypeSnippet|kItemTypeProxy;
+	int kItemTypeMost      = ~(kItemTypeSettings|kItemTypeBundle|kItemTypeMenu|kItemTypeMenuItemSeparator|kItemTypeUnknown);
 	int kItemTypeAny       = -1;
 
 	std::string const kFieldUUID                     = "uuid";
@@ -91,9 +92,9 @@ namespace bundles
 			{
 				if(plist::array_t const* array = boost::get<plist::array_t>(&pair.second))
 				{
-					iterate(any, *array)
+					for(auto const& any : *array)
 					{
-						if(std::string const* str = boost::get<std::string>(&*any))
+						if(std::string const* str = boost::get<std::string>(&any))
 							_fields.emplace(pair.first, *str);
 					}
 				}
@@ -103,14 +104,14 @@ namespace bundles
 				// initialize from a tmSettings file
 				if(plist::dictionary_t const* dictionary = boost::get<plist::dictionary_t>(&pair.second))
 				{
-					iterate(dictPair, *dictionary)
-						_fields.emplace(pair.first, dictPair->first);
+					for(auto const& dictPair : *dictionary)
+						_fields.emplace(pair.first, dictPair.first);
 				}
 				else if(plist::array_t const* array = boost::get<plist::array_t>(&pair.second))
 				{
-					iterate(any, *array) // initialize from cache
+					for(auto const& any : *array) // initialize from cache
 					{
-						if(std::string const* str = boost::get<std::string>(&*any))
+						if(std::string const* str = boost::get<std::string>(&any))
 							_fields.emplace(pair.first, *str);
 					}
 				}
@@ -202,9 +203,9 @@ namespace bundles
 		if(_kind != kItemTypeBundle)
 			return bundle()->support_path();
 
-		iterate(path, _paths)
+		for(auto const& path : _paths)
 		{
-			std::string supportPath = path::join(*path, "../Support");
+			std::string supportPath = path::join(path, "../Support");
 			if(path::exists(supportPath))
 				return supportPath;
 		}
@@ -253,8 +254,8 @@ namespace bundles
 				default:
 				{
 					std::vector<plist::dictionary_t> plists;
-					iterate(path, _paths)
-						plists.push_back(plist::load(*path));
+					for(auto const& path : _paths)
+						plists.push_back(plist::load(path));
 					_plist = std::make_shared<plist::dictionary_t>(plist::merge_delta(plists));
 				}
 				break;
@@ -299,6 +300,17 @@ namespace bundles
 		match = match && (_kind & kind) == _kind;
 		match = match && (!bundle || bundle == bundle_uuid());
 		return match;
+	}
+
+	plist::dictionary_t erase_false_values (plist::dictionary_t const& plist)
+	{
+		plist::dictionary_t res;
+		for(auto const& pair : plist)
+		{
+			if(!boost::get<bool>(&pair.second) || boost::get<bool>(pair.second))
+				res.insert(res.end(), pair);
+		}
+		return res;
 	}
 
 	bool item_t::save (bool useDeltaIfNonLocal)
@@ -352,11 +364,25 @@ namespace bundles
 			}
 		}
 
-		plist::dictionary_t newPlist = plist();
+		plist::dictionary_t newPlist = erase_false_values(plist());
 		bool saveAsDelta = useDeltaIfNonLocal && (!_local && !_paths.empty() || _paths.size() > 1);
 		if(saveAsDelta)
 		{
-			plist::dictionary_t oldPlist = plist::load(_paths[_local ? 1 : 0]);
+			plist::dictionary_t oldPlist = erase_false_values(plist::load(_paths[_local ? 1 : 0]));
+			if(oldPlist == newPlist && _kind != kItemTypeBundle)
+			{
+				if(unlink(destPath.c_str()) == 0 || errno == ENOENT)
+				{
+					if(_local)
+					{
+						_local = false;
+						if(_paths.size() > 1)
+							_paths.erase(_paths.begin(), ++_paths.begin());
+					}
+					return true;
+				}
+			}
+
 			newPlist = plist::create_delta(oldPlist, newPlist);
 		}
 

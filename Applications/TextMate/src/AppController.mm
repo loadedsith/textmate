@@ -154,6 +154,7 @@ BOOL HasDocumentWindow (NSArray* windows)
 		NSInteger choice = NSRunAlertPanel(@"TextMate is Outdated!", @"You can get a new version from https://macromates.com/download.", @"Visit Website", nil, nil);
 		if(choice == NSAlertDefaultReturn) // "Visit Website"
 			[[NSWorkspace sharedWorkspace] openURL:[NSURL URLWithString:@"https://macromates.com/download"]];
+		[DocumentController disableSessionSave];
 		[NSApp terminate:self];
 	}
 	else if([currentDate laterDate:warningDate] == currentDate)
@@ -174,6 +175,11 @@ BOOL HasDocumentWindow (NSArray* windows)
 
 	settings_t::set_default_settings_path([[[NSBundle mainBundle] pathForResource:@"Default" ofType:@"tmProperties"] fileSystemRepresentation]);
 	settings_t::set_global_settings_path(path::join(path::home(), "Library/Application Support/TextMate/Global.tmProperties"));
+
+	std::string const src = path::join(path::home(), "Library/Application Support/TextMate/project-state.db");
+	std::string const dst = path::join(path::home(), "Library/Application Support/TextMate/RecentProjects.db");
+	if(path::exists(src) && !path::exists(dst))
+		rename(src.c_str(), dst.c_str());
 
 	[[NSUserDefaults standardUserDefaults] registerDefaults:@{
 		@"ApplePressAndHoldEnabled" : @NO,
@@ -225,16 +231,30 @@ BOOL HasDocumentWindow (NSArray* windows)
 	[[BundlesManager sharedInstance] loadBundlesIndex];
 	[[TMPlugInController sharedInstance] loadAllPlugIns:nil];
 
-	BOOL restoreSession = ![[NSUserDefaults standardUserDefaults] boolForKey:kUserDefaultsDisableSessionRestoreKey];
-	if(restoreSession && ([NSEvent modifierFlags] & NSShiftKeyMask))
+	if(BOOL restoreSession = ![[NSUserDefaults standardUserDefaults] boolForKey:kUserDefaultsDisableSessionRestoreKey])
 	{
-		NSInteger choice = NSRunAlertPanel(@"Disable Session Restore?", @"By holding down shift (⇧) you have indicated that you wish to disable restoring the documents which were open in last session.", @"Disable", @"Restore Documents", nil);
-		if(choice == NSAlertDefaultReturn) // "Disable"
-			restoreSession = NO;
-	}
+		std::string const prematureTerminationDuringRestore = path::join(path::home(), "Library/Application Support/TextMate/Session/restore_in_progress");;
 
-	if(restoreSession)
-		[DocumentController restoreSession];
+		NSString* promptUser = nil;
+		if(path::exists(prematureTerminationDuringRestore))
+			promptUser = @"Previous attempt of restoring your session caused an abnormal exit. Would you like to skip session restore?";
+		else if([NSEvent modifierFlags] & NSShiftKeyMask)
+			promptUser = @"By holding down shift (⇧) you have indicated that you wish to disable restoring the documents which were open in last session.";
+
+		if(promptUser)
+		{
+			NSInteger choice = NSRunAlertPanel(@"Disable Session Restore?", promptUser, @"Disable", @"Restore Documents", nil);
+			if(choice == NSAlertDefaultReturn) // "Disable"
+				restoreSession = NO;
+		}
+
+		if(restoreSession)
+		{
+			path::set_content(prematureTerminationDuringRestore, "");
+			[DocumentController restoreSession];
+		}
+		unlink(prematureTerminationDuringRestore.c_str());
+	}
 }
 
 - (BOOL)applicationShouldOpenUntitledFile:(NSApplication*)anApplication

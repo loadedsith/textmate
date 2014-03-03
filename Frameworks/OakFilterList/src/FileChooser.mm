@@ -3,6 +3,7 @@
 #import <OakAppKit/OakAppKit.h>
 #import <OakAppKit/OakFileIconImage.h>
 #import <OakAppKit/OakUIConstructionFunctions.h>
+#import <OakAppKit/OakScopeBarView.h>
 #import <OakFoundation/NSString Additions.h>
 #import <OakFileBrowser/OFBPathInfoCell.h>
 #import <ns/ns.h>
@@ -13,66 +14,11 @@
 #import <oak/algorithm.h>
 #import <oak/duration.h>
 
-static NSString* const kUserDefaultsShowOpenFilesInFileChooserKey = @"showOpenFilesInFileChooser";
+static NSString* const kUserDefaultsFileChooserSourceIndexKey = @"fileChooserSourceIndex";
 
-static NSButton* OakCreateScopeButton (NSString* label, SEL action, NSUInteger tag)
-{
-	NSButton* res = [NSButton new];
-	[[res cell] setBackgroundStyle:NSBackgroundStyleRaised];
-	[[res cell] setControlSize:NSSmallControlSize];
-	NSString* accessibilityRole = NSAccessibilityRadioButtonRole;
-	[[res cell] accessibilitySetOverrideValue:accessibilityRole forAttribute:NSAccessibilityRoleAttribute];
-	[[res cell] accessibilitySetOverrideValue:NSAccessibilityRoleDescription(accessibilityRole, nil) forAttribute:NSAccessibilityRoleDescriptionAttribute];
-	res.bezelStyle                      = NSRecessedBezelStyle;
-	res.buttonType                      = NSPushOnPushOffButton;
-	res.title                           = label;
-	res.tag                             = tag;
-	res.action                          = action;
-	res.showsBorderOnlyWhileMouseInside = YES;
-
-	return res;
-}
-
-@interface OakScopeBarView : NSView
-@end
-
-@implementation OakScopeBarView
-- (BOOL)accessibilityIsIgnored
-{
-	return NO;
-}
-
-- (NSSet*)myAccessibilityAttributeNames
-{
-	static NSSet* set = [NSSet setWithArray:@[
-		NSAccessibilityRoleAttribute,
-	]];
-	return set;
-}
-
-- (NSArray*)accessibilityAttributeNames
-{
-	static NSArray* attributes = [[[self myAccessibilityAttributeNames] setByAddingObjectsFromArray:[super accessibilityAttributeNames]] allObjects];
-	return attributes;
-}
-
-- (BOOL)accessibilityIsAttributeSettable:(NSString*)attribute
-{
-	if([[self myAccessibilityAttributeNames] containsObject:attribute])
-		return NO;
-	return [super accessibilityIsAttributeSettable:attribute];
-}
-
-- (id)accessibilityAttributeValue:(NSString *)attribute
-{
-	if([attribute isEqualToString:NSAccessibilityRoleAttribute])
-		return NSAccessibilityRadioGroupRole;
-	else
-		return [super accessibilityAttributeValue:attribute];
-}
-@end
-
-// =======================
+NSUInteger const kFileChooserAllSourceIndex                = 0;
+NSUInteger const kFileChooserOpenDocumentsSourceIndex      = 1;
+NSUInteger const kFileChooserUncommittedChangesSourceIndex = 2;
 
 namespace
 {
@@ -255,12 +201,7 @@ static path::glob_list_t globs_for_path (std::string const& path)
 	std::vector<document_record_t>                _records;
 	document::scanner_ptr                         _scanner;
 }
-@property (nonatomic) NSButton*            allButton;
-@property (nonatomic) NSButton*            openDocumentsButton;
-@property (nonatomic) NSButton*            scmChangesButton;
 @property (nonatomic) NSProgressIndicator* progressIndicator;
-
-@property (nonatomic) NSUInteger           sourceIndex;
 
 @property (nonatomic) BOOL                 polling;
 @property (nonatomic) NSTimer*             pollTimer;
@@ -285,24 +226,8 @@ static path::glob_list_t globs_for_path (std::string const& path)
 		cell.lineBreakMode = NSLineBreakByTruncatingMiddle;
 		[[self.tableView tableColumnWithIdentifier:@"name"] setDataCell:cell];
 
-		_allButton           = OakCreateScopeButton(@"All",                   @selector(takeSourceIndexFrom:), 0);
-		_openDocumentsButton = OakCreateScopeButton(@"Open Documents",        @selector(takeSourceIndexFrom:), 1);
-		_scmChangesButton    = OakCreateScopeButton(@"Uncommitted Documents", @selector(takeSourceIndexFrom:), 2);
-		[_allButton setState:NSOnState];
-		[_scmChangesButton setEnabled:NO];
 		OakScopeBarView* scopeBar = [OakScopeBarView new];
-		NSDictionary* scopeButtons = @{
-			@"allButton"           : _allButton,
-			@"openDocumentsButton" : _openDocumentsButton,
-			@"scmChangesButton"    : _scmChangesButton,
-		};
-		for(NSView* scopeButton in @[_allButton, _openDocumentsButton, _scmChangesButton])
-		{
-			[scopeButton setTranslatesAutoresizingMaskIntoConstraints:NO];
-			[scopeBar addSubview:scopeButton];
-		}
-		[scopeBar addConstraints:[NSLayoutConstraint constraintsWithVisualFormat:@"H:|[allButton]-[openDocumentsButton]-[scmChangesButton]|" options:0 metrics:nil views:scopeButtons]];
-		[scopeBar addConstraints:[NSLayoutConstraint constraintsWithVisualFormat:@"V:|[allButton]|" options:0 metrics:0 views:scopeButtons]];
+		scopeBar.labels = @[ @"All", @"Open Documents", @"Uncommitted Documents" ];
 
 		_progressIndicator = [[NSProgressIndicator alloc] initWithFrame:NSZeroRect];
 		_progressIndicator.style                = NSProgressIndicatorSpinningStyle;
@@ -336,12 +261,20 @@ static path::glob_list_t globs_for_path (std::string const& path)
 		[contentView addConstraints:[NSLayoutConstraint constraintsWithVisualFormat:@"H:|-(24)-[statusTextField]-[itemCountTextField]-(4)-[progressIndicator]-(4)-|" options:NSLayoutFormatAlignAllCenterY metrics:nil views:views]];
 		[contentView addConstraints:[NSLayoutConstraint constraintsWithVisualFormat:@"V:|-(2)-[searchField]-(8)-[aboveScopeBarDark][aboveScopeBarLight]-(3)-[scopeBar]-(4)-[topDivider][scrollView(>=50)][bottomDivider]-(4)-[statusTextField]-(5)-|" options:0 metrics:nil views:views]];
 
-		if([[NSUserDefaults standardUserDefaults] boolForKey:kUserDefaultsShowOpenFilesInFileChooserKey])
-			self.sourceIndex = 1;
+		self.sourceIndex = [[NSUserDefaults standardUserDefaults] integerForKey:kUserDefaultsFileChooserSourceIndexKey];
 
 		[self updateWindowTitle];
+
+		[scopeBar bind:NSValueBinding toObject:self withKeyPath:@"sourceIndex" options:nil];
 	}
 	return self;
+}
+
+- (void)showWindow:(id)sender
+{
+	if(_path && !_scmInfo)
+		[self obtainSCMInfo];
+	[super showWindow:sender];
 }
 
 - (void)windowWillClose:(NSNotification*)aNotification
@@ -361,9 +294,9 @@ static path::glob_list_t globs_for_path (std::string const& path)
 	NSString* src = nil;
 	switch(self.sourceIndex)
 	{
-		case 0: src = [self.path stringByAbbreviatingWithTildeInPath]; break;
-		case 1: src = @"Open Documents";                               break;
-		case 2: src = @"Uncommitted Documents";                        break;
+		case kFileChooserAllSourceIndex:                src = [self.path stringByAbbreviatingWithTildeInPath]; break;
+		case kFileChooserOpenDocumentsSourceIndex:      src = @"Open Documents";                               break;
+		case kFileChooserUncommittedChangesSourceIndex: src = @"Uncommitted Documents";                        break;
 	}
 	self.window.title = [NSString stringWithFormat:@"Go to File — %@", src];
 }
@@ -392,18 +325,16 @@ static path::glob_list_t globs_for_path (std::string const& path)
 
 - (void)setSourceIndex:(NSUInteger)newIndex
 {
-	_sourceIndex = newIndex;
-	switch(newIndex)
+	if(_sourceIndex != newIndex)
 	{
-		case 0: self.onlyShowOpenDocuments = NO;  break;
-		case 1: self.onlyShowOpenDocuments = YES; break;
-		case 2: break;
+		_sourceIndex = newIndex;
+		[self updateWindowTitle];
+		[self reload];
+
+		if(_sourceIndex == 0)
+				[[NSUserDefaults standardUserDefaults] removeObjectForKey:kUserDefaultsFileChooserSourceIndexKey];
+		else	[[NSUserDefaults standardUserDefaults] setObject:@(_sourceIndex) forKey:kUserDefaultsFileChooserSourceIndexKey];
 	}
-
-	for(NSButton* button in @[ _allButton, _openDocumentsButton, _scmChangesButton ])
-		[button setState:[button tag] == _sourceIndex ? NSOnState : NSOffState];
-
-	[self updateWindowTitle];
 }
 
 - (void)addRecordsForDocuments:(std::vector<document::document_ptr> const&)documents
@@ -522,6 +453,12 @@ static path::glob_list_t globs_for_path (std::string const& path)
 	if(!_scmInfo)
 		return;
 
+	if(_sourceIndex == kFileChooserUncommittedChangesSourceIndex)
+	{
+		[self reloadSCMStatus];
+		return;
+	}
+
 	NSRange visibleRange = [self.tableView rowsInRect:[self.tableView visibleRect]];
 	for(NSUInteger row = visibleRange.location; row < NSMaxRange(visibleRange); ++row)
 	{
@@ -549,7 +486,12 @@ static path::glob_list_t globs_for_path (std::string const& path)
 		return;
 	_path = aString;
 
-	if(_onlyShowOpenDocuments)
+	_scmInfo.reset();
+	[self obtainSCMInfo];
+
+	if(_sourceIndex == kFileChooserUncommittedChangesSourceIndex)
+		[self reloadSCMStatus];
+	if(_sourceIndex != kFileChooserAllSourceIndex)
 		return;
 
 	[self shutdownScanner];
@@ -560,13 +502,6 @@ static path::glob_list_t globs_for_path (std::string const& path)
 	[self addRecordsForDocuments:_openDocuments];
 	settings_t const settings = settings_for_path(NULL_STR, "", to_s(_path));
 	_scanner = std::make_shared<document::scanner_t>(to_s(_path), globs_for_path(to_s(_path)), settings.get(kSettingsFollowSymbolicLinksKey, false), false, false);
-	_scmInfo = scm::info(to_s(_path));
-	if(_scmInfo)
-	{
-		_scmInfo->add_callback(^(scm::info_t const& info){
-			[self updateSCMStatus];
-		});
-	}
 
 	_pollInterval = 0.01;
 	_pollTimer = [NSTimer scheduledTimerWithTimeInterval:_pollInterval target:self selector:@selector(fetchScannerResults:) userInfo:nil repeats:NO];
@@ -575,31 +510,61 @@ static path::glob_list_t globs_for_path (std::string const& path)
 	[self updateWindowTitle];
 }
 
-- (void)setOnlyShowOpenDocuments:(BOOL)flag
+- (scm::info_ptr)obtainSCMInfo
 {
-	if(_onlyShowOpenDocuments == flag)
-		return;
-
-	_onlyShowOpenDocuments = flag;
-	[self reload];
-	[[NSUserDefaults standardUserDefaults] setObject:@(_onlyShowOpenDocuments) forKey:kUserDefaultsShowOpenFilesInFileChooserKey];
+	if(!_scmInfo && (_scmInfo = scm::info(to_s(_path))))
+	{
+		_scmInfo->add_callback(^(scm::info_t const& info){
+			[self updateSCMStatus];
+		});
+	}
+	return _scmInfo;
 }
 
 - (void)reload
 {
-	if(_onlyShowOpenDocuments)
+	switch(_sourceIndex)
 	{
-		[self shutdownScanner];
+		case kFileChooserAllSourceIndex:
+		{
+			NSString* path = _path;
+			_path = nil;
+			self.path = path;
+		}
+		break;
 
-		_records.clear();
-		[self addRecordsForDocuments:_openDocuments];
+		case kFileChooserOpenDocumentsSourceIndex:
+		{
+			[self shutdownScanner];
+
+			_records.clear();
+			[self addRecordsForDocuments:_openDocuments];
+		}
+		break;
+
+		case kFileChooserUncommittedChangesSourceIndex:
+		{
+			[self shutdownScanner];
+			[self reloadSCMStatus];
+		}
+		break;
 	}
-	else
+}
+
+- (void)reloadSCMStatus
+{
+	std::vector<document::document_ptr> scmStatus;
+	if([self obtainSCMInfo])
 	{
-		NSString* path = _path;
-		_path = nil;
-		self.path = path;
+		for(auto pair : _scmInfo->status())
+		{
+			if(pair.second & (scm::status::modified|scm::status::added|scm::status::deleted|scm::status::conflicted))
+				scmStatus.push_back(document::create(pair.first));
+		}
 	}
+
+	_records.clear();
+	[self addRecordsForDocuments:scmStatus];
 }
 
 - (void)fetchScannerResults:(NSTimer*)aTimer
@@ -788,8 +753,9 @@ static path::glob_list_t globs_for_path (std::string const& path)
 {
 	if(self.window.isKeyWindow)
 	{
-		[[aMenu addItemWithTitle:@"All" action:@selector(takeSourceIndexFrom:) keyEquivalent:@"1"] setTag:0];
-		[[aMenu addItemWithTitle:@"Open Documents" action:@selector(takeSourceIndexFrom:) keyEquivalent:@"2"] setTag:1];
+		[[aMenu addItemWithTitle:@"All" action:@selector(takeSourceIndexFrom:) keyEquivalent:@"1"] setTag:kFileChooserAllSourceIndex];
+		[[aMenu addItemWithTitle:@"Open Documents" action:@selector(takeSourceIndexFrom:) keyEquivalent:@"2"] setTag:kFileChooserOpenDocumentsSourceIndex];
+		[[aMenu addItemWithTitle:@"Uncommitted Documents" action:@selector(takeSourceIndexFrom:) keyEquivalent:@"3"] setTag:kFileChooserUncommittedChangesSourceIndex];
 	}
 	else
 	{
@@ -801,7 +767,7 @@ static path::glob_list_t globs_for_path (std::string const& path)
 {
 	BOOL activate = YES;
 	if([item action] == @selector(goToParentFolder:))
-		activate = _onlyShowOpenDocuments == NO && to_s(_path) != path::parent(to_s(_path));
+		activate = _sourceIndex == kFileChooserAllSourceIndex && to_s(_path) != path::parent(to_s(_path));
 	else if([item action] == @selector(takeSourceIndexFrom:))
 		[item setState:[item tag] == self.sourceIndex ? NSOnState : NSOffState];
 	return activate;

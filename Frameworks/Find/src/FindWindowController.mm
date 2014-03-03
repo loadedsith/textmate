@@ -185,7 +185,7 @@ static NSButton* OakCreateStopSearchButton ()
 		self.window.title              = @"Find";
 		self.window.frameAutosaveName  = @"Find";
 		self.window.hidesOnDeactivate  = NO;
-		self.window.collectionBehavior = self.window.collectionBehavior | NSWindowCollectionBehaviorMoveToActiveSpace;
+		self.window.collectionBehavior = NSWindowCollectionBehaviorMoveToActiveSpace|NSWindowCollectionBehaviorFullScreenAuxiliary;
 		self.window.delegate           = self;
 
 		self.findLabel                 = OakCreateLabel(@"Find:");
@@ -312,7 +312,7 @@ static NSButton* OakCreateStopSearchButton ()
 
 		[[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(userDefaultsDidChange:) name:NSUserDefaultsDidChangeNotification object:[NSUserDefaults standardUserDefaults]];
 		[[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(findClipboardDidChange:) name:OakPasteboardDidChangeNotification object:[OakPasteboard pasteboardWithName:NSFindPboard]];
-		[[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(replaceClipboardDidChange:) name:OakPasteboardDidChangeNotification object:[OakPasteboard pasteboardWithName:NSReplacePboard]];
+		[[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(replaceClipboardDidChange:) name:OakPasteboardDidChangeNotification object:[OakPasteboard pasteboardWithName:OakReplacePboard]];
 		[[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(textViewWillPerformFindOperation:) name:@"OakTextViewWillPerformFindOperation" object:nil];
 
 		[self.window addObserver:self forKeyPath:@"firstResponder" options:0 context:NULL];
@@ -486,7 +486,7 @@ static NSButton* OakCreateStopSearchButton ()
 
 - (void)replaceClipboardDidChange:(NSNotification*)aNotification
 {
-	self.replaceString = [[[OakPasteboard pasteboardWithName:NSReplacePboard] current] string];
+	self.replaceString = [[[OakPasteboard pasteboardWithName:OakReplacePboard] current] string];
 }
 
 - (void)observeValueForKeyPath:(NSString*)keyPath ofObject:(id)object change:(NSDictionary*)change context:(void*)context
@@ -536,16 +536,16 @@ static NSButton* OakCreateStopSearchButton ()
 	{
 		OakPasteboardEntry* oldEntry = [[OakPasteboard pasteboardWithName:NSFindPboard] current];
 		if(!oldEntry || ![oldEntry.string isEqualToString:_findString])
-			[[OakPasteboard pasteboardWithName:NSFindPboard] addEntry:[OakPasteboardEntry pasteboardEntryWithString:_findString andOptions:newOptions]];
+			[[OakPasteboard pasteboardWithName:NSFindPboard] addEntryWithString:_findString andOptions:newOptions];
 		else if(![oldEntry.options isEqualToDictionary:newOptions])
 			oldEntry.options = newOptions;
 	}
 
 	if(_replaceString)
 	{
-		NSString* oldReplacement = [[[OakPasteboard pasteboardWithName:NSReplacePboard] current] string];
+		NSString* oldReplacement = [[[OakPasteboard pasteboardWithName:OakReplacePboard] current] string];
 		if(!oldReplacement || ![oldReplacement isEqualToString:_replaceString])
-			[[OakPasteboard pasteboardWithName:NSReplacePboard] addEntry:[OakPasteboardEntry pasteboardEntryWithString:_replaceString]];
+			[[OakPasteboard pasteboardWithName:OakReplacePboard] addEntryWithString:_replaceString];
 	}
 
 	return res;
@@ -659,7 +659,7 @@ static NSButton* OakCreateStopSearchButton ()
 - (IBAction)showReplaceHistory:(id)sender
 {
 	if(![[[OakPasteboardSelector sharedInstance] window] isVisible])
-		[[OakPasteboard pasteboardWithName:NSReplacePboard] selectItemForControl:self.replaceTextField];
+		[[OakPasteboard pasteboardWithName:OakReplacePboard] selectItemForControl:self.replaceTextField];
 	// if the panel is visible it will automatically be hidden due to the mouse click
 }
 

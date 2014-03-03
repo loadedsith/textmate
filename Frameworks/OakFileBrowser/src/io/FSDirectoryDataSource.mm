@@ -4,6 +4,7 @@
 #import <OakFoundation/NSString Additions.h>
 #import <OakAppKit/OakFileIconImage.h>
 #import <OakAppKit/OakFileManager.h>
+#import <Preferences/Keys.h>
 #import <oak/server.h>
 #import <io/entries.h>
 #import <io/events.h>
@@ -167,6 +168,8 @@ private:
 
 	static void async_reload (FSDirectoryDataSource* dataSource, FSItem* rootItem, scm::weak_info_ptr weakSCMInfo, bool reloadWasRequested)
 	{
+		BOOL allowExpandingLinks = [[[NSUserDefaults standardUserDefaults] objectForKey:kUserDefaultsAllowExpandingLinksKey] boolValue];
+
 		std::string const dir = to_s([rootItem.url path]);
 		bool includeHidden = (dataSource.dataSourceOptions & kFSDataSourceOptionIncludeHidden) == kFSDataSourceOptionIncludeHidden;
 
@@ -241,7 +244,11 @@ private:
 						item.labelIndex   = fsItem.label;
 						item.sortAsFolder = fsItem.sort_as_directory;
 						item.leaf         = !fsItem.treat_as_directory;
+						item.link         = fsItem.is_link;
 						item.target       = fsItem.target != NULL_STR ? [NSURL URLWithString:[NSString stringWithCxxString:fsItem.target]] : nil;
+
+						if(allowExpandingLinks && fsItem.is_link && fsItem.sort_as_directory && item.leaf)
+							item.leaf = NO;
 
 						[array addObject:item];
 						pathsOnDisk.insert(fsItem.path);
@@ -270,8 +277,8 @@ private:
 					}
 
 					NSMutableArray* lostItems = [NSMutableArray array];
-					iterate(pair, existingItems)
-						add_item_and_children(pair->second, lostItems);
+					for(auto const& pair : existingItems)
+						add_item_and_children(pair.second, lostItems);
 					[dataSource lostItems:lostItems];
 					[dataSource setLastModified:buf.st_mtimespec forPath:dir];
 

@@ -12,6 +12,7 @@ OAK_DEBUG_VAR(RMateServer);
 /*
 	open
 	path: [«path»|-]
+	uuid: «uuid»
 	real-path: «path»
 	token: «string»
 	display-name: «string»
@@ -458,7 +459,7 @@ struct socket_observer_t
 			}
 			else if(state == command)
 			{
-				if(str == ".")
+				if(str == "." || strcasecmp(str.c_str(), "quit") == 0)
 				{
 					state = done;
 				}
@@ -504,9 +505,9 @@ struct socket_observer_t
 		reactivate_callback_t reactivate_callback;
 
 		std::vector<document::document_ptr> documents;
-		iterate(record, records)
+		for(auto& record : records)
 		{
-			std::map<std::string, std::string>& args = record->arguments;
+			std::map<std::string, std::string>& args = record.arguments;
 			bool wait             = args["wait"] == "yes";
 			bool writeBackOnSave  = args["data-on-save"] == "yes";
 			bool writeBackOnClose = args["data-on-close"] == "yes";
@@ -523,6 +524,11 @@ struct socket_observer_t
 					continue;
 				}
 				doc = document::create(args["path"]);
+			}
+			else if(args.find("uuid") != args.end())
+			{
+				if(!(doc = document::find(args["uuid"])))
+					continue;
 			}
 			else if(args.find("data") != args.end())
 			{
@@ -563,7 +569,7 @@ struct socket_observer_t
 				doc->add_callback(new save_close_callback_t(doc->path(), socket, writeBackOnSave, writeBackOnClose, token));
 
 			if(args.find("data") != args.end() && (writeBackOnSave || writeBackOnClose))
-				doc->add_callback(new retain_temp_file_callback_t(record->file));
+				doc->add_callback(new retain_temp_file_callback_t(record.file));
 
 			if(reActivate)
 				reactivate_callback.watch_document(doc);

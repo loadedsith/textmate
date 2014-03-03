@@ -1,5 +1,27 @@
 # Changes
 
+## 2014-02-23 ([v2.0-alpha.9515](https://github.com/textmate/textmate/compare/v2.0-alpha.9503...v2.0-alpha.9515))
+
+  * If you want the file browser to show symbolic links as expandable items then select _Preferences → Projects → Show links as expandable_.
+
+  * If you want the current document to always be selected in the file browser then select _Preferences → Projects → Keep current document selected_. *[Torsten Trautwein]*
+
+  * If you dislike how TextMate moves tabs to be “right of current” when opening an already open document then disable _Preferences → Projects → Re-order when opening a file_.
+
+  * TextMate will now remember open tabs for “project folders”. This means that if you run `mate «folder»`, open a few tabs and close the window, then if you later open the same folder, TextMate will restore the open tabs (and file browser state).
+
+    You can see which folders TextMate has stored state for via _File → Open Favorites…_ (⇧⌘O) — probably soon to be renamed “Open Project…”.
+
+    The feature can be disabled using:
+
+        defaults write com.macromates.TextMate.preview disableFolderStateRestore -bool YES
+
+  * Commands executed by TextMate can now be interrupted by pressing ⌘. or ⌃C.
+
+  * Added an `--uuid` option to the `mate` shell command which allows referencing untitled documents. If `mate` is called from a TextMate command without any file argument then the UUID defaults to that of the current document, meaning a command can use something like `"$TM_MATE" -l10-10:5` to select the first four characters on line 10.
+
+  * The _Bundles_ page in this about window would not show changes for 2014. This is now fixed.
+
 ## 2014-01-13 ([v2.0-alpha.9503](https://github.com/textmate/textmate/compare/v2.0-alpha.9495...v2.0-alpha.9503))
 
 * Various changes, click link above for details.

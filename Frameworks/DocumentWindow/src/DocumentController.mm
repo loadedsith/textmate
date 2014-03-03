@@ -30,11 +30,12 @@
 #import <text/utf8.h>
 #import <ns/ns.h>
 #import <oak/compat.h>
+#import <kvdb/kvdb.h>
 
 namespace find_tags { enum { in_document = 1, in_selection, in_project, in_folder }; } // From AppController.h
 
 static NSString* const kUserDefaultsFindInSelectionByDefault = @"findInSelectionByDefault";
-static NSString* const kUserDefaultsDisableTabReordering = @"disableTabReordering";
+static NSString* const kUserDefaultsDisableFolderStateRestore = @"disableFolderStateRestore";
 static NSString* const OakDocumentPboardType = @"OakDocumentPboardType"; // drag’n’drop of tabs
 static BOOL IsInShouldTerminateEventLoop = NO;
 
@@ -258,6 +259,12 @@ namespace
 	scm::info_ptr                          _documentSCMInfo;
 	std::map<std::string, std::string>     _documentSCMVariables;
 	std::vector<std::string>               _documentScopeAttributes;
+}
+
++ (KVDB*)sharedProjectStateDB
+{
+	NSString* appSupport = [[NSSearchPathForDirectoriesInDomains(NSApplicationSupportDirectory, NSUserDomainMask, YES) objectAtIndex:0] stringByAppendingPathComponent:@"TextMate"];
+	return [KVDB sharedDBUsingFile:@"RecentProjects.db" inDirectory:appSupport];
 }
 
 - (id)init
@@ -607,11 +614,19 @@ namespace
 	std::copy_if(_documents.begin(), _documents.end(), back_inserter(documents), [](document::document_ptr const& doc){ return doc->is_modified(); });
 
 	if(documents.empty())
+	{
+		if(self.treatAsProjectWindow)
+			[[DocumentController sharedProjectStateDB] setValue:[self sessionInfoIncludingUntitledDocuments:NO] forKey:self.projectPath];
 		return YES;
+	}
 
 	[self showCloseWarningUIForDocuments:documents completionHandler:^(BOOL canClose){
 		if(canClose)
+		{
+			if(self.treatAsProjectWindow)
+				[[DocumentController sharedProjectStateDB] setValue:[self sessionInfoIncludingUntitledDocuments:NO] forKey:self.projectPath];
 			[self.window close];
+		}
 	}];
 
 	return NO;
@@ -779,7 +794,7 @@ namespace
 
 - (BOOL)disableTabReordering
 {
-	return [[NSUserDefaults standardUserDefaults] boolForKey:kUserDefaultsDisableTabReordering];;
+	return [[NSUserDefaults standardUserDefaults] boolForKey:kUserDefaultsDisableTabReorderingKey];;
 }
 
 - (void)openItems:(NSArray*)items closingOtherTabs:(BOOL)closeOtherTabsFlag
@@ -861,9 +876,9 @@ namespace
 			}
 
 			NSMutableIndexSet* indexSet = [NSMutableIndexSet indexSet];
-			iterate(pair, ranked)
+			for(auto const& pair : ranked)
 			{
-				[indexSet addIndex:pair->second];
+				[indexSet addIndex:pair.second];
 				if([indexSet count] == excessTabs)
 					break;
 			}
@@ -1033,7 +1048,7 @@ namespace
 {
 	[self updateWindowTitle];
 	
-	if(self.autoRevealFile)
+	if(self.autoRevealFile && self.fileBrowserVisible)
 	{
 		if(_selectedDocument && _selectedDocument->path() != NULL_STR)
 			[self revealFileInProject:self];
@@ -1169,14 +1184,14 @@ namespace
 		{
 			std::string const path = to_s(_documentPath);
 			std::vector<std::string> revPath;
-			citerate(token, text::tokenize(path.begin(), path.end(), '/'))
+			for(auto const& token : text::tokenize(path.begin(), path.end(), '/'))
 			{
-				std::string tmp = *token;
-				citerate(subtoken, text::tokenize(tmp.begin(), tmp.end(), '.'))
+				std::string tmp = token;
+				for(auto const& subtoken : text::tokenize(tmp.begin(), tmp.end(), '.'))
 				{
-					if((*subtoken).empty())
+					if(subtoken.empty())
 						continue;
-					revPath.push_back(*subtoken);
+					revPath.push_back(subtoken);
 					std::replace(revPath.back().begin(), revPath.back().end(), ' ', '_');
 				}
 			}
@@ -1655,6 +1670,8 @@ namespace
 		{
 			self.fileBrowser.nextResponder = self.fileBrowser.view.nextResponder;
 			self.fileBrowser.view.nextResponder = self.fileBrowser;
+			if(self.autoRevealFile && _selectedDocument && _selectedDocument->path() != NULL_STR)
+				[self revealFileInProject:self];
 		}
 
 		if(!self.disableFileBrowserWindowResize && ([self.window styleMask] & NSFullScreenWindowMask) != NSFullScreenWindowMask)
@@ -1959,6 +1976,11 @@ namespace
 	return res;
 }
 
+- (BOOL)treatAsProjectWindow
+{
+	return self.projectPath && (self.fileBrowserVisible || _documents.size() > 1);
+}
+
 - (NSPoint)positionForWindowUnderCaret
 {
 	return [self.textView positionForWindowUnderCaret];
@@ -2010,10 +2032,10 @@ namespace
 	if(customCandidate != NULL_STR && customCandidate != documentPath && (std::find_if(_documents.begin(), _documents.end(), [&customCandidate](document::document_ptr const& doc){ return customCandidate == doc->path(); }) != _documents.end() || path::exists(customCandidate)))
 		return [self openItems:@[ @{ @"path" : [NSString stringWithCxxString:customCandidate] } ] closingOtherTabs:NO];
 
-	citerate(entry, path::entries(documentDir))
+	for(auto const& entry : path::entries(documentDir))
 	{
-		std::string const name = (*entry)->d_name;
-		if((*entry)->d_type == DT_REG && documentBase == path::strip_extensions(name) && path::extensions(name) != "")
+		std::string const name = entry->d_name;
+		if(entry->d_type == DT_REG && documentBase == path::strip_extensions(name) && path::extensions(name) != "")
 		{
 			std::string const content = path::content(path::join(documentDir, name));
 			if(utf8::is_valid(content.data(), content.data() + content.size()))
@@ -2025,10 +2047,10 @@ namespace
 	path::glob_t const binaryGlob(settings.get(kSettingsBinaryKey, ""));
 
 	std::vector<std::string> v;
-	iterate(path, candidates)
+	for(auto const& path : candidates)
 	{
-		if(*path == documentPath || !binaryGlob.does_match(*path) && !excludeGlob.does_match(*path))
-			v.push_back(*path);
+		if(path == documentPath || !binaryGlob.does_match(path) && !excludeGlob.does_match(path))
+			v.push_back(path);
 	}
 
 	if(v.size() == 1)
@@ -2203,9 +2225,11 @@ namespace
 
 + (void)initialize
 {
-	static NSString* const WindowNotifications[] = { NSWindowDidBecomeKeyNotification, NSWindowDidDeminiaturizeNotification, NSWindowDidExposeNotification, NSWindowDidMiniaturizeNotification, NSWindowDidMoveNotification, NSWindowDidResizeNotification, NSWindowWillCloseNotification };
-	iterate(notification, WindowNotifications)
-		[[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(scheduleSessionBackup:) name:*notification object:nil];
+	static dispatch_once_t onceToken = 0;
+	dispatch_once(&onceToken, ^{
+		for(NSString* notification in @[ NSWindowDidBecomeKeyNotification, NSWindowDidDeminiaturizeNotification, NSWindowDidExposeNotification, NSWindowDidMiniaturizeNotification, NSWindowDidMoveNotification, NSWindowDidResizeNotification, NSWindowWillCloseNotification ])
+			[[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(scheduleSessionBackup:) name:notification object:nil];
+	});
 }
 
 + (void)backupSessionFiredTimer:(NSTimer*)aTimer
@@ -2228,6 +2252,9 @@ namespace
 
 static NSUInteger DisableSessionSavingCount = 0;
 
++ (void)disableSessionSave { ++DisableSessionSavingCount; }
++ (void)enableSessionSave  { --DisableSessionSavingCount; }
+
 + (BOOL)restoreSession
 {
 	BOOL res = NO;
@@ -2237,61 +2264,111 @@ static NSUInteger DisableSessionSavingCount = 0;
 	for(NSDictionary* project in session[@"projects"])
 	{
 		DocumentController* controller = [DocumentController new];
-
-		if(NSString* fileBrowserWidth = project[@"fileBrowserWidth"])
-			controller.fileBrowserWidth = [fileBrowserWidth floatValue];
-		if(NSString* htmlOutputSize = project[@"htmlOutputSize"])
-			controller.htmlOutputSize = NSSizeFromString(htmlOutputSize);
-
-		controller.defaultProjectPath = project[@"projectPath"];
-		controller.fileBrowserHistory = project[@"fileBrowserState"];
-		controller.fileBrowserVisible = [project[@"fileBrowserVisible"] boolValue];
-
+		[controller setupControllerForProject:project skipMissingFiles:NO];
 		if(NSString* windowFrame = project[@"windowFrame"])
 			[controller.window setFrame:NSRectFromString(windowFrame) display:NO];
-
-		std::vector<document::document_ptr> documents;
-		NSInteger selectedTabIndex = 0;
-
-		for(NSDictionary* info in project[@"documents"])
-		{
-			document::document_ptr doc;
-			NSString* identifier = info[@"identifier"];
-			if(!identifier || !(doc = document::find(to_s(identifier), true)))
-			{
-				NSString* path = info[@"path"];
-				doc = path ? document::create(to_s(path)) : create_untitled_document_in_folder(to_s(controller.untitledSavePath));
-				if(NSString* displayName = info[@"displayName"])
-					doc->set_custom_name(to_s(displayName));
-				if([info[@"sticky"] boolValue])
-					doc->set_sticky(true);
-			}
-
-			doc->set_recent_tracking(false);
-			documents.push_back(doc);
-
-			if([info[@"selected"] boolValue])
-				selectedTabIndex = documents.size() - 1;
-		}
-
-		if(documents.empty())
-			documents.push_back(create_untitled_document_in_folder(to_s(controller.untitledSavePath)));
-
-		controller.documents        = documents;
-		controller.selectedTabIndex = selectedTabIndex;
-
-		[controller openAndSelectDocument:documents[selectedTabIndex]];
 		[controller showWindow:nil];
-
 		if([project[@"miniaturized"] boolValue])
 			[controller.window miniaturize:nil];
 		else if([project[@"fullScreen"] boolValue])
 			[controller.window toggleFullScreen:self];
-
 		res = YES;
 	}
 
 	--DisableSessionSavingCount;
+	return res;
+}
+
+- (void)setupControllerForProject:(NSDictionary*)project skipMissingFiles:(BOOL)skipMissing
+{
+	if(NSString* fileBrowserWidth = project[@"fileBrowserWidth"])
+		self.fileBrowserWidth = [fileBrowserWidth floatValue];
+	if(NSString* htmlOutputSize = project[@"htmlOutputSize"])
+		self.htmlOutputSize = NSSizeFromString(htmlOutputSize);
+
+	self.defaultProjectPath = project[@"projectPath"];
+	self.fileBrowserHistory = project[@"fileBrowserState"];
+	self.fileBrowserVisible = [project[@"fileBrowserVisible"] boolValue];
+
+	std::vector<document::document_ptr> documents;
+	NSInteger selectedTabIndex = 0;
+
+	for(NSDictionary* info in project[@"documents"])
+	{
+		document::document_ptr doc;
+		NSString* identifier = info[@"identifier"];
+		if(!identifier || !(doc = document::find(to_s(identifier), true)))
+		{
+			NSString* path = info[@"path"];
+			if(path && skipMissing && access([path fileSystemRepresentation], F_OK) != 0)
+				continue;
+
+			doc = path ? document::create(to_s(path)) : create_untitled_document_in_folder(to_s(self.untitledSavePath));
+			if(NSString* displayName = info[@"displayName"])
+				doc->set_custom_name(to_s(displayName));
+			if([info[@"sticky"] boolValue])
+				doc->set_sticky(true);
+		}
+
+		doc->set_recent_tracking(false);
+		documents.push_back(doc);
+
+		if([info[@"selected"] boolValue])
+			selectedTabIndex = documents.size() - 1;
+	}
+
+	if(documents.empty())
+		documents.push_back(create_untitled_document_in_folder(to_s(self.untitledSavePath)));
+
+	self.documents        = documents;
+	self.selectedTabIndex = selectedTabIndex;
+
+	[self openAndSelectDocument:documents[selectedTabIndex]];
+}
+
+- (NSDictionary*)sessionInfoIncludingUntitledDocuments:(BOOL)includeUntitled
+{
+	NSMutableDictionary* res = [NSMutableDictionary dictionary];
+
+	if(NSString* projectPath = self.defaultProjectPath)
+		res[@"projectPath"] = projectPath;
+	if(NSDictionary* history = self.fileBrowserHistory)
+		res[@"fileBrowserState"] = history;
+
+	if(([self.window styleMask] & NSFullScreenWindowMask) == NSFullScreenWindowMask)
+			res[@"fullScreen"] = @YES;
+	else	res[@"windowFrame"] = NSStringFromRect([self.window frame]);
+
+	res[@"miniaturized"]       = @([self.window isMiniaturized]);
+	res[@"htmlOutputSize"]     = NSStringFromSize(self.htmlOutputSize);
+	res[@"fileBrowserVisible"] = @(self.fileBrowserVisible);
+	res[@"fileBrowserWidth"]   = @(self.fileBrowserWidth);
+
+	NSMutableArray* docs = [NSMutableArray array];
+	for(auto document : self.documents)
+	{
+		if(!includeUntitled && (document->path() == NULL_STR || !path::exists(document->path())))
+			continue;
+
+		NSMutableDictionary* doc = [NSMutableDictionary dictionary];
+		if(document->is_modified() || document->path() == NULL_STR)
+		{
+			doc[@"identifier"] = [NSString stringWithCxxString:document->identifier()];
+			if(document->is_open())
+				document->backup();
+		}
+		if(document->path() != NULL_STR)
+			doc[@"path"] = [NSString stringWithCxxString:document->path()];
+		if(document->display_name() != NULL_STR)
+			doc[@"displayName"] = [NSString stringWithCxxString:document->display_name()];
+		if(document == self.selectedDocument)
+			doc[@"selected"] = @YES;
+		if(document->sticky())
+			doc[@"sticky"] = @YES;
+		[docs addObject:doc];
+	}
+	res[@"documents"] = docs;
+	res[@"lastRecentlyUsed"] = [NSDate date];
 	return res;
 }
 
@@ -2302,49 +2379,7 @@ static NSUInteger DisableSessionSavingCount = 0;
 
 	NSMutableArray* projects = [NSMutableArray array];
 	for(DocumentController* controller in [SortedControllers() reverseObjectEnumerator])
-	{
-		NSMutableDictionary* res = [NSMutableDictionary dictionary];
-
-		if(NSString* projectPath = controller.defaultProjectPath)
-			res[@"projectPath"] = projectPath;
-		if(NSDictionary* history = controller.fileBrowserHistory)
-			res[@"fileBrowserState"] = history;
-
-		if(([controller.window styleMask] & NSFullScreenWindowMask) == NSFullScreenWindowMask)
-				res[@"fullScreen"] = @YES;
-		else	res[@"windowFrame"] = NSStringFromRect([controller.window frame]);
-
-		res[@"miniaturized"]       = @([controller.window isMiniaturized]);
-		res[@"htmlOutputSize"]     = NSStringFromSize(controller.htmlOutputSize);
-		res[@"fileBrowserVisible"] = @(controller.fileBrowserVisible);
-		res[@"fileBrowserWidth"]   = @(controller.fileBrowserWidth);
-
-		NSMutableArray* docs = [NSMutableArray array];
-		for(auto document : controller.documents)
-		{
-			if(!includeUntitled && (document->path() == NULL_STR || !path::exists(document->path())))
-				continue;
-
-			NSMutableDictionary* doc = [NSMutableDictionary dictionary];
-			if(document->is_modified() || document->path() == NULL_STR)
-			{
-				doc[@"identifier"] = [NSString stringWithCxxString:document->identifier()];
-				if(document->is_open())
-					document->backup();
-			}
-			if(document->path() != NULL_STR)
-				doc[@"path"] = [NSString stringWithCxxString:document->path()];
-			if(document->display_name() != NULL_STR)
-				doc[@"displayName"] = [NSString stringWithCxxString:document->display_name()];
-			if(document == controller.selectedDocument)
-				doc[@"selected"] = @YES;
-			if(document->sticky())
-				doc[@"sticky"] = @YES;
-			[docs addObject:doc];
-		}
-		res[@"documents"] = docs;
-		[projects addObject:res];
-	}
+		[projects addObject:[controller sessionInfoIncludingUntitledDocuments:includeUntitled]];
 
 	NSDictionary* session = @{ @"projects" : projects };
 	return [session writeToFile:[self sessionPath] atomically:YES];
@@ -2473,10 +2508,10 @@ static NSUInteger DisableSessionSavingCount = 0;
 				if(candidate.projectPath)
 				{
 					std::string const projectPath = to_s(candidate.projectPath);
-					iterate(parent, parents)
+					for(auto const& parent : parents)
 					{
-						if(path::is_child(*parent, projectPath))
-							candidates.emplace(parent->size() - projectPath.size(), candidate);
+						if(path::is_child(parent, projectPath))
+							candidates.emplace(parent.size() - projectPath.size(), candidate);
 					}
 				}
 			}
@@ -2561,12 +2596,20 @@ static NSUInteger DisableSessionSavingCount = 0;
 			else if(controller.selectedDocument)
 				[controller selectedDocument]->set_custom_name("not untitled"); // release potential untitled token used
 
-			controller.defaultProjectPath = [NSString stringWithCxxString:folder];
-			controller.fileBrowserVisible = YES;
-			controller.documents          = make_vector(create_untitled_document_in_folder(folder));
-			controller.fileBrowser.url    = [NSURL fileURLWithPath:[NSString stringWithCxxString:folder]];
+			BOOL disableFolderStateRestore = [[NSUserDefaults standardUserDefaults] boolForKey:kUserDefaultsDisableFolderStateRestore];
+			if(NSDictionary* project = (disableFolderStateRestore ? nil : [[DocumentController sharedProjectStateDB] valueForKey:[NSString stringWithCxxString:folder]]))
+			{
+				[controller setupControllerForProject:project skipMissingFiles:YES];
+			}
+			else
+			{
+				controller.defaultProjectPath = [NSString stringWithCxxString:folder];
+				controller.fileBrowserVisible = YES;
+				controller.documents          = make_vector(create_untitled_document_in_folder(folder));
+				controller.fileBrowser.url    = [NSURL fileURLWithPath:[NSString stringWithCxxString:folder]];
 
-			[controller openAndSelectDocument:[controller documents][controller.selectedTabIndex]];
+				[controller openAndSelectDocument:[controller documents][controller.selectedTabIndex]];
+			}
 			bring_to_front(controller);
 		}
 

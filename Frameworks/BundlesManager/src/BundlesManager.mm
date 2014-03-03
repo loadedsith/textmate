@@ -57,8 +57,17 @@ static double const kPollInterval = 3*60*60;
 	{
 		sourceList   = bundles_db::sources();
 		bundlesIndex = bundles_db::index(kInstallDirectory);
+
+		[[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(applicationWillTerminate:) name:NSApplicationWillTerminateNotification object:NSApp];
 	}
 	return self;
+}
+
+- (void)applicationWillTerminate:(NSNotification*)aNotification
+{
+	D(DBF_BundlesManager, bug("\n"););
+	if(self.needsSaveBundlesIndex)
+		[self saveBundlesIndex:self];
 }
 
 - (void)setAutoUpdateBundles:(BOOL)flag
@@ -319,6 +328,7 @@ static double const kPollInterval = 3*60*60;
 	D(DBF_BundlesManager, bug("%s\n", BSTR(_needsCreateBundlesIndex)););
 	if(_needsCreateBundlesIndex == NO)
 		return;
+	_needsCreateBundlesIndex = NO;
 
 	auto pair = create_bundle_index(bundlesPaths, cache);
 	bundles::set_index(pair.first, pair.second);
@@ -327,8 +337,6 @@ static double const kPollInterval = 3*60*60;
 	for(auto path : bundlesPaths)
 		cache.copy_heads_for_path(path, std::inserter(newWatchList, newWatchList.end()));
 	[self updateWatchList:newWatchList];
-
-	_needsCreateBundlesIndex = NO;
 }
 
 - (void)saveBundlesIndex:(id)sender
@@ -456,8 +464,8 @@ namespace
 				if(plist::dictionary_t const* dictionary = boost::get<plist::dictionary_t>(&pair.second))
 				{
 					plist::array_t settings;
-					iterate(settingsPair, *dictionary)
-						settings.push_back(settingsPair->first);
+					for(auto const& settingsPair : *dictionary)
+						settings.push_back(settingsPair.first);
 					res.emplace(pair.first, settings);
 				}
 			}
